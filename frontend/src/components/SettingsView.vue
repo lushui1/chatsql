@@ -1,5 +1,12 @@
 <template>
   <div class="settings-overlay" @click.self="$emit('close')">
+    <!-- Toast notification -->
+    <Transition name="toast">
+      <div v-if="toast.visible" :class="['toast', toast.type]">
+        {{ toast.message }}
+      </div>
+    </Transition>
+
     <div class="settings-panel">
       <div class="settings-header">
         <h2>⚙️ 设置</h2>
@@ -58,8 +65,9 @@
               <label>用户名<input v-model="newSource.username" placeholder="root" /></label>
               <label>密码<input v-model="newSource.password" type="password" placeholder="••••" /></label>
             </div>
-            <div v-if="testSourceResult" :class="testSourceResult.ok ? 'test-success' : 'test-error'">
-              {{ testSourceResult.msg }}
+            <div v-if="testSourceResult" :class="['test-banner', testSourceResult.ok ? 'test-success' : 'test-error']">
+              <span class="test-icon">{{ testSourceResult.ok ? '✅' : '❌' }}</span>
+              <span>{{ testSourceResult.msg }}</span>
             </div>
             <div class="form-actions">
               <button class="small-btn" @click="testSource" :disabled="testingSource">
@@ -170,6 +178,15 @@ const tabs = [
   { key: 'system', icon: 'ℹ️', label: '系统' },
 ]
 
+// ── Toast ──
+const toast = ref({ visible: false, message: '', type: 'success' })
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function showToast(message: string, type: 'success' | 'error' = 'success') {
+  if (toastTimer) clearTimeout(toastTimer)
+  toast.value = { visible: true, message, type }
+  toastTimer = setTimeout(() => { toast.value.visible = false }, 3000)
+}
+
 // ── Data Sources ──
 const sources = ref<any[]>([])
 const showAddSource = ref(false)
@@ -223,8 +240,11 @@ async function testSource() {
     })
     const data = await res.json()
     testSourceResult.value = data
+    showToast(data.message, data.ok ? 'success' : 'error')
   } catch (e: any) {
-    testSourceResult.value = { ok: false, msg: `请求失败: ${e.message}` }
+    const msg = `请求失败: ${e.message}`
+    testSourceResult.value = { ok: false, msg }
+    showToast(msg, 'error')
   } finally {
     testingSource.value = false
   }
@@ -317,12 +337,15 @@ async function saveLLMConfig() {
     })
     if (res.ok) {
       llmSaved.value = true
+      showToast('LLM 配置已保存并生效', 'success')
       setTimeout(() => llmSaved.value = false, 2000)
-      // Reload to get updated masked key
       await loadLLMConfig()
+    } else {
+      showToast('保存失败', 'error')
     }
-  } catch (e) { console.error(e) }
-  finally { llmSaving.value = false }
+  } catch (e: any) {
+    showToast(`保存失败: ${e.message}`, 'error')
+  } finally { llmSaving.value = false }
 }
 
 // ── System ──
@@ -335,11 +358,14 @@ async function testConnection() {
     if (res.ok) {
       const data = await res.json()
       testResult.value = { ok: true, msg: `✅ 后端连接正常 (${data.service} v${data.version || '?'})` }
+      showToast('后端连接正常', 'success')
     } else {
       testResult.value = { ok: false, msg: `❌ 状态码 ${res.status}` }
+      showToast(`后端返回 ${res.status}`, 'error')
     }
   } catch (e: any) {
     testResult.value = { ok: false, msg: `❌ 连接失败: ${e.message}` }
+    showToast(`连接失败: ${e.message}`, 'error')
   }
 }
 
@@ -500,24 +526,68 @@ onMounted(() => {
 }
 .saved-hint { font-size: 13px; color: var(--success); }
 .error-hint { font-size: 13px; color: var(--error); }
-.test-success {
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid var(--success);
+.test-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border-radius: var(--radius);
-  padding: 10px 14px;
-  margin: 12px 0;
-  font-size: 13px;
+  padding: 14px 16px;
+  margin: 16px 0;
+  font-size: 14px;
+  font-weight: 500;
+  animation: fadeIn 0.3s ease;
+}
+.test-icon { font-size: 18px; flex-shrink: 0; }
+.test-success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 2px solid var(--success);
   color: var(--success);
 }
 .test-error {
-  background: rgba(239, 68, 68, 0.1);
-  border: 1px solid var(--error);
-  border-radius: var(--radius);
-  padding: 10px 14px;
-  margin: 12px 0;
-  font-size: 13px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 2px solid var(--error);
   color: var(--error);
 }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 200;
+  padding: 14px 24px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  max-width: 400px;
+}
+.toast.success {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 2px solid #10b981;
+}
+.toast.error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 2px solid #ef4444;
+}
+[data-theme="dark"] .toast.success {
+  background: #064e3b;
+  color: #6ee7b7;
+}
+[data-theme="dark"] .toast.error {
+  background: #450a0a;
+  color: #fca5a5;
+}
+.toast-enter-active { transition: all 0.3s ease; }
+.toast-leave-active { transition: all 0.3s ease; }
+.toast-enter-from { opacity: 0; transform: translateY(-20px); }
+.toast-leave-to { opacity: 0; transform: translateY(-20px); }
 
 /* Metadata */
 .metadata-view { margin-top: 16px; }
