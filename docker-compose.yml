@@ -1,0 +1,22 @@
+services:
+  chatsql:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8000"
+    environment:
+      - CHATSQL_LLM_PROVIDER=openai
+      - CHATSQL_LLM_API_KEY=${CHATSQL_LLM_API_KEY:-}
+      - CHATSQL_LLM_BASE_URL=${CHATSQL_LLM_BASE_URL:-https://api.openai.com/v1}
+      - CHATSQL_LLM_MODEL=${CHATSQL_LLM_MODEL:-gpt-4o-mini}
+      - CHATSQL_LLM_THINK_MODEL=${CHATSQL_LLM_THINK_MODEL:-gpt-4o}
+      - CHATSQL_DATABASE_URL=sqlite+aiosqlite:///./data/chatsql.db
+      - CHATSQL_DATASOURCE_TYPE=duckdb
+      - CHATSQL_DEBUG=false
+    volumes:
+      - chatsql-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  chatsql-data:
