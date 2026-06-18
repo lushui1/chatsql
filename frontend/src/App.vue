@@ -50,64 +50,112 @@
           :key="turn.response_id"
           class="turn"
         >
-          <!-- User message -->
-          <div class="user-msg" v-if="getUserText(turn.request_input)">
-            {{ getUserText(turn.request_input) }}
-          </div>
-
-          <!-- Planning area -->
-          <div
-            class="planning-area"
-            v-for="item in turn.output.filter(o => o.type === 'function_call' && o.name === 'planning')"
-            :key="item.id"
-          >
-            <div class="planning-header">📋 分析规划</div>
-            <div class="planning-body">
-              <template v-if="parseArgs(item.arguments).overview">
-                <p class="overview">{{ parseArgs(item.arguments).overview }}</p>
-              </template>
-              <div
-                v-for="step in parseArgs(item.arguments).steps || []"
-                :key="step.id"
-                class="step"
-              >
-                <span class="step-num">{{ step.id }}</span>
-                <span class="step-title">{{ step.title }}</span>
+          <!-- User message (RIGHT) -->
+          <div class="msg-row user-row" v-if="getUserText(turn.request_input)">
+            <div class="bubble user-bubble">
+              <div class="bubble-avatar">🧑</div>
+              <div class="bubble-content">
+                {{ getUserText(turn.request_input) }}
               </div>
             </div>
           </div>
 
-          <!-- Assistant text -->
-          <div
-            class="assistant-msg"
-            v-for="item in turn.output.filter(o => o.type === 'message')"
-            :key="item.id"
-          >
-            {{ getOutputText(item) }}
-          </div>
+          <!-- Assistant section (LEFT) -->
+          <div class="msg-row assistant-row">
+            <div class="bubble assistant-bubble">
+              <div class="bubble-avatar">🤖</div>
+              <div class="bubble-content">
+                <!-- Tool calls -->
+                <template v-for="item in turn.output.filter(o => o.type === 'function_call')" :key="item.id">
+                  <!-- Planning -->
+                  <div v-if="item.name === 'planning'" class="tool-card planning-card">
+                    <div class="tool-header" @click="item._open = !item._open">
+                      <span class="tool-icon">📋</span>
+                      <span class="tool-name">分析规划</span>
+                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                    </div>
+                    <div class="tool-body" v-if="item._open !== false">
+                      <template v-if="parseArgs(item.arguments).overview">
+                        <p class="overview">{{ parseArgs(item.arguments).overview }}</p>
+                      </template>
+                      <div
+                        v-for="step in parseArgs(item.arguments).steps || []"
+                        :key="step.id"
+                        class="step"
+                      >
+                        <span class="step-num">{{ step.id }}</span>
+                        <span class="step-title">{{ step.title }}</span>
+                      </div>
+                    </div>
+                  </div>
 
-          <!-- Chart results -->
-          <div
-            class="result-card"
-            v-for="item in turn.output.filter(o => o.type === 'function_call' && o.name === 'smartbot_chart')"
-            :key="item.id"
-          >
-            <ChartCard :args="parseArgs(item.arguments)" />
-          </div>
+                  <!-- Chart -->
+                  <div v-else-if="item.name === 'smartbot_chart'" class="tool-card chart-card">
+                    <div class="tool-header">
+                      <span class="tool-icon">📊</span>
+                      <span class="tool-name">数据图表</span>
+                    </div>
+                    <div class="tool-body">
+                      <ChartCard :args="parseArgs(item.arguments)" />
+                    </div>
+                  </div>
 
-          <!-- Clarification -->
-          <div
-            class="result-card clarification"
-            v-for="item in turn.output.filter(o => o.type === 'function_call' && o.name === 'ask_clarification')"
-            :key="item.id"
-          >
-            <div class="clarification-q">❓ {{ parseArgs(item.arguments).question }}</div>
+                  <!-- Clarification -->
+                  <div v-else-if="item.name === 'ask_clarification'" class="tool-card clarification-card">
+                    <div class="tool-header">
+                      <span class="tool-icon">❓</span>
+                      <span class="tool-name">追问</span>
+                    </div>
+                    <div class="tool-body">
+                      <p>{{ parseArgs(item.arguments).question }}</p>
+                    </div>
+                  </div>
+
+                  <!-- Subscription -->
+                  <div v-else-if="item.name === 'propose_subscription'" class="tool-card subscription-card">
+                    <div class="tool-header">
+                      <span class="tool-icon">🔔</span>
+                      <span class="tool-name">订阅建议</span>
+                    </div>
+                    <div class="tool-body">
+                      <p>{{ parseArgs(item.arguments).message || '建议创建定时推送' }}</p>
+                    </div>
+                  </div>
+
+                  <!-- Generic tool call -->
+                  <div v-else class="tool-card generic-card">
+                    <div class="tool-header" @click="item._open = !item._open">
+                      <span class="tool-icon">🔧</span>
+                      <span class="tool-name">{{ item.name || '工具调用' }}</span>
+                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                    </div>
+                    <div class="tool-body" v-if="item._open">
+                      <pre class="tool-args">{{ JSON.stringify(parseArgs(item.arguments), null, 2) }}</pre>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- Assistant text -->
+                <div
+                  class="assistant-text"
+                  v-for="item in turn.output.filter(o => o.type === 'message')"
+                  :key="item.id"
+                >
+                  {{ getOutputText(item) }}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
         <!-- Streaming indicator -->
-        <div v-if="isStreaming" class="streaming-indicator">
-          <span class="dots"><span></span><span></span><span></span></span>
+        <div v-if="isStreaming" class="msg-row assistant-row">
+          <div class="bubble assistant-bubble">
+            <div class="bubble-avatar">🤖</div>
+            <div class="bubble-content">
+              <span class="streaming-dots"><span></span><span></span><span></span></span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -529,97 +577,135 @@ async function scrollToBottom() {
 }
 
 /* Turn */
-.turn {
-  margin-bottom: 32px;
-}
-.user-msg {
+.turn { margin-bottom: 24px; }
+
+/* Message rows */
+.msg-row { display: flex; margin-bottom: 8px; }
+.user-row { justify-content: flex-end; }
+.assistant-row { justify-content: flex-start; }
+
+/* Bubbles */
+.bubble { display: flex; gap: 10px; max-width: 85%; }
+.user-row .bubble { flex-direction: row-reverse; }
+.bubble-avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
   background: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  padding: 12px 16px;
-  border-radius: var(--radius);
-  margin-bottom: 16px;
-  margin-left: 40px;
-  display: inline-block;
-  max-width: 80%;
 }
-.assistant-msg {
-  padding: 12px 0;
-  white-space: pre-wrap;
-  line-height: 1.7;
+.bubble-content { flex: 1; min-width: 0; }
+
+/* User bubble */
+.user-bubble .bubble-content {
+  background: var(--accent);
+  color: white;
+  padding: 12px 16px;
+  border-radius: 16px 16px 4px 16px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
 }
 
-/* Planning */
-.planning-area {
+/* Assistant bubble */
+.assistant-bubble .bubble-content {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
   padding: 16px;
-  margin: 12px 0;
+  border-radius: 16px 16px 16px 4px;
+  font-size: 14px;
+  line-height: 1.7;
 }
-.planning-header {
-  font-weight: 600;
+.assistant-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Tool cards */
+.tool-card {
   margin-bottom: 12px;
-  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
 }
-.planning-body .overview {
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-  font-size: 13px;
-}
-.step {
+.tool-header {
   display: flex;
-  gap: 10px;
-  padding: 6px 0;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 600;
 }
+.tool-icon { font-size: 15px; }
+.tool-name { flex: 1; color: var(--text-secondary); }
+.tool-toggle { font-size: 11px; color: var(--text-muted); }
+.tool-body { padding: 12px 14px; }
+.tool-args {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow-x: auto;
+  color: var(--text-primary);
+  margin: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Planning card */
+.planning-card .tool-header { background: rgba(59, 130, 246, 0.08); }
+.planning-card .tool-name { color: #3b82f6; }
+.overview { color: var(--text-secondary); margin-bottom: 12px; font-size: 13px; }
+.step { display: flex; gap: 10px; padding: 6px 0; }
 .step-num {
-  width: 24px;
-  height: 24px;
+  width: 24px; height: 24px;
   border-radius: 50%;
   background: var(--accent);
   color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   font-size: 12px;
   flex-shrink: 0;
 }
-.step-title {
-  font-size: 13px;
-}
+.step-title { font-size: 13px; }
 
-/* Result cards */
-.result-card {
-  margin: 12px 0;
+/* Chart card */
+.chart-card .tool-header { background: rgba(16, 185, 129, 0.08); }
+.chart-card .tool-name { color: #10b981; }
+
+/* Clarification card */
+.clarification-card { border-color: var(--warning); }
+.clarification-card .tool-header { background: rgba(245, 158, 11, 0.08); }
+.clarification-card .tool-name { color: #f59e0b; }
+
+/* Subscription card */
+.subscription-card .tool-header { background: rgba(139, 92, 246, 0.08); }
+.subscription-card .tool-name { color: #8b5cf6; }
+
+/* Generic tool card */
+.generic-card .tool-header { background: var(--bg-tertiary); }
+
+/* Streaming dots */
+.streaming-dots { display: flex; gap: 4px; padding: 4px 0; }
+.streaming-dots span {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  animation: blink 1.4s infinite both;
 }
-.result-card.clarification {
-  background: var(--bg-secondary);
-  border: 1px solid var(--warning);
-  border-radius: var(--radius);
-  padding: 16px;
-}
-.clarification-q {
-  font-size: 15px;
+.streaming-dots span:nth-child(2) { animation-delay: 0.2s; }
+.streaming-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.3; }
+  40% { opacity: 1; }
 }
 
 /* Streaming */
-.streaming-indicator {
-  display: flex;
-  justify-content: center;
-  padding: 12px;
-}
-.dots {
-  display: flex;
-  gap: 4px;
-}
-.dots span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  animation: bounce 1.4s infinite;
-}
-.dots span:nth-child(2) { animation-delay: 0.2s; }
-.dots span:nth-child(3) { animation-delay: 0.4s; }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

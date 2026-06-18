@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -13,8 +16,52 @@ from app.presentation.http.security.auth_utils import verify_admin_key
 router = APIRouter()
 _settings = get_settings()
 
+CONFIG_FILE = Path(__file__).resolve().parent.parent.parent.parent / "data" / "config.json"
+
 # Runtime LLM overrides (survives within process lifetime)
 _llm_overrides: dict = {}
+
+
+def _load_config():
+    """Load persisted LLM config from disk on startup."""
+    global _llm_overrides
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            _llm_overrides = data.get("llm", {})
+            # Apply to settings
+            for field in ["provider", "api_key", "base_url", "model", "think_model", "temperature", "max_tokens"]:
+                key = f"llm_{field}" if field != "provider" else "llm_provider"
+                if field in _llm_overrides and hasattr(_settings, key):
+                    setattr(_settings, key, _llm_overrides[field])
+        except Exception:
+            pass
+
+
+def _save_config():
+    """Persist LLM config to disk."""
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Read existing (may contain other sections)
+    existing = {}
+    if CONFIG_FILE.exists():
+        try:
+            existing = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    existing["llm"] = {
+        "provider": _settings.llm_provider,
+        "api_key": _settings.llm_api_key,
+        "base_url": _settings.llm_base_url,
+        "model": _settings.llm_model,
+        "think_model": _settings.llm_think_model,
+        "temperature": _settings.llm_temperature,
+        "max_tokens": _settings.llm_max_tokens,
+    }
+    CONFIG_FILE.write_text(json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# Load on module import
+_load_config()
 
 
 @router.get("/healthz")
@@ -96,4 +143,5 @@ async def update_llm_config(req: LLMConfigUpdate):
         _settings.llm_temperature = req.temperature
     if req.max_tokens is not None:
         _settings.llm_max_tokens = req.max_tokens
+    _save_config()
     return JSONResponse(content={"ok": True, "message": "LLM配置已更新"})
