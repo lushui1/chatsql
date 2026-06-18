@@ -6,13 +6,14 @@ import json
 import time
 from typing import Any, AsyncGenerator
 
-from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domain.response_domain import build_response_resource
 from app.infrastructure.repositories import conversation_store as store
 from app.application.tools.builtin_tools import get_default_tools
+from app.application.llm import LLMProvider, get_provider
+from app.application.learn.service import LearnService
 
 
 class ResponsesService:
@@ -21,16 +22,13 @@ class ResponsesService:
     def __init__(self, db: AsyncSession, settings: Settings):
         self._db = db
         self._settings = settings
-        self._client: AsyncOpenAI | None = None
+        self._provider: LLMProvider | None = None
 
     @property
-    def client(self) -> AsyncOpenAI:
-        if self._client is None:
-            self._client = AsyncOpenAI(
-                api_key=self._settings.llm_api_key or "dummy",
-                base_url=self._settings.llm_base_url,
-            )
-        return self._client
+    def provider(self) -> LLMProvider:
+        if self._provider is None:
+            self._provider = get_provider(self._settings)
+        return self._provider
 
     def normalize_input(self, raw_input: str | list) -> list[dict]:
         """Normalize input to list-of-dicts format."""
@@ -49,8 +47,8 @@ class ResponsesService:
                 result.append(item)
         return result
 
-    def _build_system_prompt(self, instructions: str | None = None) -> str:
-        """Build system prompt with datasource context."""
+    def _build_system_prompt(self, instructions: str | None = None, learn_context: str = "") -> str:
+        """Build system prompt with auto-fetched datasource metadata and learn context."""
         base = (
             "你是 ChatSQL 智能问数助手。用户会用自然语言提问，你需要：\n"
             "1. 理解用户意图，必要时调用 ask_clarification 澄清\n"
@@ -58,11 +56,42 @@ class ResponsesService:
             "3. 编写 SQL 查询数据（当前数据源支持标准 SQL）\n"
             "4. 用 smartbot_chart 工具返回图表结果\n"
             "5. 给出简洁的文字结论\n\n"
-            "可用的表：\n"
-            "- orders(city, dt, gmv, order_count, avg_delay_days) — 订单数据\n"
-            "- routes(route, capacity, actual, load_rate, dt) — 线路装载率\n"
-            "- sort_center(center_name, volume) — 分拣中心货量\n"
         )
+
+        # Auto-fetch metadata from the active data source
+        try:
+            from app.application.datasources.manager import get_manager
+            import asyncio as _aio
+            mgr = get_manager()
+            sources = mgr.list_sources()
+            if sources:
+                target = sources[0]["name"]
+                loop = _aio.get_event_loop()
+                if loop.is_running():
+                    # Can't await in sync — use cached fallback
+                    raise RuntimeError("skip")
+                metadata = loop.run_until_complete(mgr.get_full_metadata(target))
+                if metadata.get("tables"):
+                    base += "可用的数据源表结构：\n"
+                    for t in metadata["tables"]:
+                        cols = ", ".join(
+                            f"{c['name']}({c['type']})" if c.get("type") else c["name"]
+                            for c in t.get("columns", [])
+                        )
+                        comment = f" — {t['comment']}" if t.get("comment") else ""
+                        base += f"- {t['name']}({cols}){comment}\n"
+                    base += "\n"
+        except Exception:
+            # Fallback to hardcoded demo schema
+            base += (
+                "可用的表：\n"
+                "- orders(city, dt, gmv, order_count, avg_delay_days) — 订单数据\n"
+                "- routes(route, capacity, actual, load_rate, dt) — 线路装载率\n"
+                "- sort_center(center_name, volume) — 分拣中心货量\n"
+            )
+
+        if learn_context:
+            base = f"{base}\n{learn_context}\n"
         if instructions:
             base = f"{base}\n{instructions}"
         return base
@@ -73,6 +102,17 @@ class ResponsesService:
             return get_default_tools()
         return request_tools
 
+    def _extract_user_query(self, input_items: list[dict]) -> str:
+        """Extract the latest user query from input items."""
+        for item in reversed(input_items):
+            if item.get("type") == "message" and item.get("role") == "user":
+                content_parts = item.get("content", [])
+                return " ".join(
+                    p.get("text", "") for p in content_parts
+                    if p.get("type") in ("input_text", "output_text")
+                )
+        return ""
+
     async def call_llm_stream(
         self,
         input_items: list[dict],
@@ -81,8 +121,20 @@ class ResponsesService:
         tools: list[dict] | None,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """Call LLM with streaming, yield chunks for SSE pipeline."""
+        # Build learn context from user query
+        user_query = self._extract_user_query(input_items)
+        learn_context = ""
+        if user_query:
+            try:
+                learn_service = LearnService(self._db, self._settings)
+                learn_context = await learn_service.build_learn_context(user_query)
+            except Exception as e:
+                # Learn context is best-effort, don't block LLM call
+                import logging
+                logging.getLogger("chatsql").warning(f"Learn context build failed: {e}")
+
         # Build messages
-        messages = [{"role": "system", "content": self._build_system_prompt(instructions)}]
+        messages = [{"role": "system", "content": self._build_system_prompt(instructions, learn_context)}]
         for item in input_items:
             if item.get("type") == "message":
                 role = item.get("role", "user")
@@ -98,65 +150,18 @@ class ResponsesService:
                     "content": item.get("output", ""),
                 })
 
-        # Prepare tools for OpenAI format
+        # Prepare tools
         llm_tools = self._get_tools(tools)
-        openai_tools = [{"type": "function", "function": {k: v for k, v in t.items() if k != "type"}} for t in llm_tools]
 
-        # Call LLM
-        stream = await self.client.chat.completions.create(
-            model=model,
+        # Call LLM via provider abstraction
+        async for chunk in self.provider.stream_chat(
             messages=messages,
-            tools=openai_tools if openai_tools else None,
-            stream=True,
-            temperature=0.3,
-        )
-
-        current_tool_call: dict | None = None
-        full_text = ""
-
-        async for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta is None:
-                continue
-
-            # Text content
-            if delta.content:
-                full_text += delta.content
-                yield {"type": "text_delta", "text": delta.content}
-
-            # Tool calls
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.id:  # New tool call starts
-                        if current_tool_call:
-                            # Finish previous
-                            yield {
-                                "type": "function_call",
-                                "call_id": current_tool_call["call_id"],
-                                "name": current_tool_call["name"],
-                                "arguments": current_tool_call["arguments"],
-                            }
-                        current_tool_call = {
-                            "call_id": tc.id,
-                            "name": tc.function.name if tc.function else "",
-                            "arguments": "",
-                        }
-                    if tc.function and tc.function.arguments:
-                        if current_tool_call:
-                            current_tool_call["arguments"] += tc.function.arguments
-
-        # Text done
-        if full_text:
-            yield {"type": "text_done", "text": full_text}
-
-        # Finish pending tool call
-        if current_tool_call:
-            yield {
-                "type": "function_call",
-                "call_id": current_tool_call["call_id"],
-                "name": current_tool_call["name"],
-                "arguments": current_tool_call["arguments"],
-            }
+            tools=llm_tools,
+            model=model,
+            temperature=self._settings.llm_temperature,
+            max_tokens=self._settings.llm_max_tokens,
+        ):
+            yield chunk
 
     async def run_completion(
         self,
@@ -204,6 +209,12 @@ class ResponsesService:
             model=model,
         )
 
+        # Trigger learn extraction in background (non-blocking)
+        import asyncio
+        asyncio.create_task(
+            self.trigger_learn_extraction(response_id, session_id, input_items, output_items)
+        )
+
         return build_response_resource(
             response_id=response_id,
             model=model,
@@ -219,3 +230,39 @@ class ResponsesService:
             output_items=output_items,
             status="completed",
         )
+
+    async def trigger_learn_extraction(
+        self,
+        response_id: str,
+        session_id: str,
+        input_items: list[dict],
+        output_items: list[dict],
+    ) -> None:
+        """Background task: extract learnable routines from completed response."""
+        try:
+            user_query = self._extract_user_query(input_items)
+            if not user_query:
+                return
+
+            # Extract assistant output text
+            assistant_text = ""
+            for item in output_items:
+                if item.get("type") == "message" and item.get("role") == "assistant":
+                    content_parts = item.get("content", [])
+                    assistant_text += " ".join(
+                        p.get("text", "") for p in content_parts
+                        if p.get("type") in ("input_text", "output_text")
+                    )
+            if not assistant_text:
+                return
+
+            learn_service = LearnService(self._db, self._settings)
+            await learn_service.extract_from_response(
+                session_id=session_id,
+                response_id=response_id,
+                user_q=user_query,
+                assistant_output=assistant_text,
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger("chatsql").warning(f"Learn extraction failed: {e}")

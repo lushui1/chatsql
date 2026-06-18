@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from sqlalchemy import Column, Integer, String, Text, Boolean, Index
+from sqlalchemy import Column, Integer, String, Text, Boolean, Float, Index, ForeignKey
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -72,3 +72,51 @@ class Feedback(Base):
 # Indices
 Index("ix_responses_session_created", Response.session_id, Response.created_at)
 Index("ix_feedbacks_response", Feedback.response_id)
+
+
+# ── Learn V2 ──
+
+
+class LearnedRoutine(Base):
+    """从对话中提取的可复用套路。"""
+    __tablename__ = "learned_routines"
+
+    id = Column(String(128), primary_key=True)
+    status = Column(String(32), default="candidate")  # candidate/active/deprecated/superseded
+    title = Column(String(255))
+    summary = Column(Text)
+    routine_type = Column(String(32))  # sql_routine / analysis_framework / business_rule
+    content = Column(Text)  # 完整套路内容（SQL模板、分析步骤等）
+    question_fingerprint = Column(String(128))  # 问题指纹（去重）
+    source_session_id = Column(String(128))
+    source_response_id = Column(String(128))
+    confidence = Column(Float, default=0.5)
+    reuse_count = Column(Integer, default=0)
+    last_hit_at = Column(Integer, nullable=True)
+    created_at = Column(Integer, default=_now)
+    updated_at = Column(Integer, default=_now, onupdate=_now)
+    tags = Column(Text, nullable=True)  # JSON 数组，分类标签
+
+
+class LearnObservation(Base):
+    """套路使用观测记录。"""
+    __tablename__ = "learn_observations"
+
+    id = Column(String(128), primary_key=True)
+    routine_id = Column(String(128), ForeignKey("learned_routines.id"))
+    session_id = Column(String(128))
+    response_id = Column(String(128), nullable=True)
+    event_type = Column(String(32))  # created/hit/miss/feedback
+    score_delta = Column(Float, default=0.0)
+    created_at = Column(Integer, default=_now)
+
+
+class LearnAudit(Base):
+    """套路生命周期审计。"""
+    __tablename__ = "learn_audits"
+
+    id = Column(String(128), primary_key=True)
+    routine_id = Column(String(128), ForeignKey("learned_routines.id"))
+    action = Column(String(32))  # created/activated/deprecated/superseded/hit
+    detail = Column(Text, nullable=True)
+    created_at = Column(Integer, default=_now)

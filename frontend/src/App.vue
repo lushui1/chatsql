@@ -4,6 +4,12 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <h1 class="logo">ChatSQL</h1>
+        <div class="header-actions">
+          <button class="icon-btn-header" @click="showSettings = true" title="设置">⚙️</button>
+          <button class="icon-btn-header" @click="toggleTheme" :title="theme === 'light' ? '切换深色' : '切换浅色'">
+            {{ theme === 'light' ? '🌙' : '☀️' }}
+          </button>
+        </div>
         <button class="new-chat-btn" @click="createNewSession">+ 新对话</button>
       </div>
       <div class="session-list">
@@ -128,12 +134,16 @@
         </div>
       </div>
     </main>
+
+    <!-- Settings Panel -->
+    <SettingsView v-if="showSettings" @close="showSettings = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, watch } from 'vue'
 import ChartCard from './components/ChartCard.vue'
+import SettingsView from './components/SettingsView.vue'
 
 interface Session {
   id: string
@@ -159,6 +169,22 @@ const isStreaming = ref(false)
 const mode = ref<'fast' | 'think'>('fast')
 const suggested = ref<string[]>([])
 const messagesRef = ref<HTMLElement>()
+const showSettings = ref(false)
+const theme = ref<'light' | 'dark'>('light')
+
+// Theme toggle
+function toggleTheme() {
+  theme.value = theme.value === 'light' ? 'dark' : 'light'
+  document.documentElement.setAttribute('data-theme', theme.value)
+  localStorage.setItem('chatsql_theme', theme.value)
+}
+
+// Load saved theme
+const savedTheme = localStorage.getItem('chatsql_theme')
+if (savedTheme === 'dark' || savedTheme === 'light') {
+  theme.value = savedTheme
+  document.documentElement.setAttribute('data-theme', theme.value)
+}
 
 // API base
 const API = '/v1'
@@ -402,10 +428,25 @@ async function scrollToBottom() {
 .logo {
   font-size: 18px;
   font-weight: 700;
-  margin-bottom: 12px;
-  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  background: linear-gradient(135deg, #2563eb, #3b82f6);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+}
+.header-actions {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.icon-btn-header {
+  background: none;
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  cursor: pointer;
+  border-radius: var(--radius);
+  font-size: 14px;
+}
+.icon-btn-header:hover {
+  background: var(--bg-tertiary);
 }
 .new-chat-btn {
   width: 100%;
@@ -493,6 +534,7 @@ async function scrollToBottom() {
 }
 .user-msg {
   background: var(--bg-tertiary);
+  border: 1px solid var(--border);
   padding: 12px 16px;
   border-radius: var(--radius);
   margin-bottom: 16px;

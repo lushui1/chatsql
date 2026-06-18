@@ -125,7 +125,7 @@ async def _stream_generator(
     ctx = create_stream_context(response_id)
 
     try:
-        async for event in stream_response(service, ctx, input_items, model, body):
+        async for event in stream_response(service, ctx, input_items, model, body, session_id):
             # Update sequence in DB
             seq = ctx.next_sequence()
             event_data = {**event, "sequence_number": seq}

@@ -56,7 +56,7 @@ function renderChart() {
   if (chartCfg.type === 'pie') {
     option = {
       tooltip: { trigger: 'item' },
-      legend: { bottom: 0, textStyle: { color: '#9ca3af' } },
+      legend: { bottom: 0, textStyle: { color: '#6b7280' } },
       series: [{
         type: 'pie',
         radius: ['40%', '70%'],
@@ -71,17 +71,17 @@ function renderChart() {
       xAxis: {
         type: 'category',
         data: xData,
-        axisLabel: { color: '#9ca3af' },
+        axisLabel: { color: '#6b7280' },
       },
       yAxis: {
         type: 'value',
-        axisLabel: { color: '#9ca3af' },
+        axisLabel: { color: '#6b7280' },
       },
       series: [{
         type: chartCfg.type === 'line' ? 'line' : 'bar',
         data: yData,
         smooth: chartCfg.type === 'line',
-        itemStyle: { color: '#3b82f6' },
+        itemStyle: { color: '#2563eb' },
       }],
       grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
     }
@@ -97,6 +97,7 @@ function renderChart() {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
+  box-shadow: var(--shadow);
 }
 .chart-header {
   display: flex;
@@ -130,13 +131,14 @@ function renderChart() {
 }
 .sql-code {
   margin-top: 8px;
-  background: var(--bg-primary);
+  background: var(--bg-tertiary);
   padding: 12px;
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 12px;
   overflow-x: auto;
   color: var(--text-secondary);
+  border: 1px solid var(--border);
 }
 .chart-answer {
   margin-top: 12px;

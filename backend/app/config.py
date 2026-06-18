@@ -24,11 +24,16 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # ── LLM Provider ──
-    llm_provider: Literal["openai", "dashscope", "ollama"] = "openai"
+    llm_provider: Literal[
+        "openai", "anthropic", "google", "dashscope",
+        "zhipu", "moonshot", "deepseek", "ollama", "custom",
+    ] = "openai"
     llm_api_key: str = ""
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
-    llm_think_model: str = "gpt-4o"
+    llm_base_url: str = ""  # empty = use provider default
+    llm_model: str = "gpt-4o-mini"  # fast mode
+    llm_think_model: str = "gpt-4o"  # think mode
+    llm_temperature: float = 0.3
+    llm_max_tokens: int = 4096
 
     # ── Database (sessions/feedback) ──
     database_url: str = "sqlite+aiosqlite:///./data/chatsql.db"

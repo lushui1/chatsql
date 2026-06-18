@@ -1,16 +1,76 @@
-"""DataSource plugin system — DuckDB, MySQL, PostgreSQL, ClickHouse.
+"""DataSource plugin system — DuckDB, MySQL, PostgreSQL, ClickHouse, Hive, Presto, Spark, Doris.
 
 All data sources implement the same interface: execute SQL → return columns + rows.
+Supports multi-source management via DataSourceManager.
 """
 
 from __future__ import annotations
 
 import abc
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 import duckdb
 
+
+# ── Data Models ──
+
+@dataclass
+class TableInfo:
+    """Table metadata."""
+    name: str
+    schema: str = ""
+    type: str = "table"  # table / view / etc.
+    comment: str = ""
+    row_count: int | None = None
+
+
+@dataclass
+class ColumnInfo:
+    """Column metadata."""
+    name: str
+    type: str
+    nullable: bool = True
+    default: str | None = None
+    comment: str = ""
+
+
+@dataclass
+class DataSourceConfig:
+    """Configuration for a data source."""
+    name: str
+    type: str  # duckdb / mysql / postgresql / clickhouse / hive / presto / spark / doris
+    description: str = ""
+    # Connection params (used by relational sources)
+    host: str = ""
+    port: int = 0
+    database: str = ""
+    username: str = ""
+    password: str = ""
+    # For DuckDB
+    url: str = ""
+    schema: str = "main"
+    # Extra options
+    extra: dict[str, Any] = field(default_factory=dict)
+
+    def to_public_dict(self) -> dict:
+        """Return config dict without password."""
+        d = {
+            "name": self.name,
+            "type": self.type,
+            "description": self.description,
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "username": self.username,
+            "url": self.url,
+            "schema": self.schema,
+        }
+        return d
+
+
+# ── Abstract DataSource ──
 
 class DataSource(abc.ABC):
     """Abstract data source — execute SQL and return structured results."""
@@ -21,15 +81,27 @@ class DataSource(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def list_tables(self) -> list[str]:
+    async def list_tables(self) -> list[TableInfo]:
         """List available tables."""
         ...
 
     @abc.abstractmethod
-    async def describe_table(self, table_name: str) -> list[dict[str, str]]:
+    async def describe_table(self, table_name: str) -> list[ColumnInfo]:
         """Describe a table's schema."""
         ...
 
+    @abc.abstractmethod
+    async def get_table_stats(self, table_name: str) -> dict:
+        """Get table statistics (row count, size, etc.)."""
+        ...
+
+    @abc.abstractmethod
+    def dialect(self) -> str:
+        """Return SQL dialect identifier."""
+        ...
+
+
+# ── DuckDB Implementation ──
 
 class DuckDBDataSource(DataSource):
     """Embedded DuckDB — zero-config, file-based OLAP."""
@@ -101,82 +173,112 @@ class DuckDBDataSource(DataSource):
         rows = [dict(zip(columns, row)) for row in result.fetchall()]
         return {"columns": [{"name": c} for c in columns], "rows": rows}
 
-    async def list_tables(self) -> list[str]:
+    async def list_tables(self) -> list[TableInfo]:
         result = self.conn.execute("SHOW TABLES").fetchall()
-        return [r[0] for r in result]
+        return [TableInfo(name=r[0]) for r in result]
 
-    async def describe_table(self, table_name: str) -> list[dict[str, str]]:
+    async def describe_table(self, table_name: str) -> list[ColumnInfo]:
         result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
-        return [{"name": r[0], "type": r[1]} for r in result]
+        return [ColumnInfo(name=r[0], type=r[1]) for r in result]
+
+    async def get_table_stats(self, table_name: str) -> dict:
+        try:
+            count_result = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            row_count = count_result[0] if count_result else 0
+        except Exception:
+            row_count = None
+        return {"table": table_name, "row_count": row_count}
+
+    def dialect(self) -> str:
+        return "duckdb"
 
 
-class MySQLDataSource(DataSource):
-    """MySQL data source (async via aiomysql)."""
+# ── Factory: create DataSource from config ──
 
-    def __init__(self, url: str):
-        self._url = url
+def create_datasource(config: DataSourceConfig) -> DataSource:
+    """Create a DataSource instance from config."""
+    source_type = config.type.lower()
 
-    async def execute(self, sql: str) -> dict[str, Any]:
-        raise NotImplementedError("MySQL plugin requires `pip install chatsql[mysql]`")
+    if source_type == "duckdb":
+        db_path = config.url or ":memory:"
+        return DuckDBDataSource(db_path, config.schema)
 
-    async def list_tables(self) -> list[str]:
-        raise NotImplementedError
+    elif source_type == "mysql":
+        from app.application.datasources.mysql_impl import MySQLDataSource
+        return MySQLDataSource(
+            host=config.host, port=config.port or 3306,
+            database=config.database, username=config.username,
+            password=config.password,
+        )
 
-    async def describe_table(self, table_name: str) -> list[dict[str, str]]:
-        raise NotImplementedError
+    elif source_type == "doris":
+        from app.application.datasources.doris import DorisDataSource
+        return DorisDataSource(
+            host=config.host, port=config.port or 9030,
+            database=config.database, username=config.username,
+            password=config.password,
+        )
+
+    elif source_type == "postgresql":
+        from app.application.datasources.postgresql_impl import PostgreSQLDataSource
+        return PostgreSQLDataSource(
+            host=config.host, port=config.port or 5432,
+            database=config.database, username=config.username,
+            password=config.password,
+        )
+
+    elif source_type == "clickhouse":
+        from app.application.datasources.clickhouse_impl import ClickHouseDataSource
+        return ClickHouseDataSource(
+            host=config.host, port=config.port or 8123,
+            database=config.database, username=config.username,
+            password=config.password,
+        )
+
+    elif source_type == "hive":
+        from app.application.datasources.hive import HiveDataSource
+        return HiveDataSource(
+            host=config.host, port=config.port or 10000,
+            database=config.database or "default",
+            username=config.username,
+        )
+
+    elif source_type == "presto":
+        from app.application.datasources.presto import PrestoDataSource
+        return PrestoDataSource(
+            host=config.host, port=config.port or 8080,
+            catalog=config.extra.get("catalog", "hive"),
+            schema=config.database or "default",
+            username=config.username,
+        )
+
+    elif source_type == "spark":
+        from app.application.datasources.spark import SparkDataSource
+        return SparkDataSource(
+            host=config.host, port=config.port or 10000,
+            database=config.database or "default",
+            username=config.username,
+        )
+
+    else:
+        raise ValueError(f"Unknown datasource type: {source_type}")
 
 
-class PostgreSQLDataSource(DataSource):
-    """PostgreSQL data source."""
-
-    def __init__(self, url: str):
-        self._url = url
-
-    async def execute(self, sql: str) -> dict[str, Any]:
-        raise NotImplementedError("PostgreSQL plugin requires `pip install chatsql[postgresql]`")
-
-    async def list_tables(self) -> list[str]:
-        raise NotImplementedError
-
-    async def describe_table(self, table_name: str) -> list[dict[str, str]]:
-        raise NotImplementedError
-
-
-class ClickHouseDataSource(DataSource):
-    """ClickHouse data source."""
-
-    def __init__(self, url: str):
-        self._url = url
-
-    async def execute(self, sql: str) -> dict[str, Any]:
-        raise NotImplementedError("ClickHouse plugin requires `pip install chatsql[clickhouse]`")
-
-    async def list_tables(self) -> list[str]:
-        raise NotImplementedError
-
-    async def describe_table(self, table_name: str) -> list[dict[str, str]]:
-        raise NotImplementedError
-
-
-# ── Factory ──
+# ── Backward-compatible singleton accessor ──
 
 _datasource: DataSource | None = None
 
 
 def get_datasource() -> DataSource:
+    """Get the default (first) datasource — backward compat."""
     global _datasource
     if _datasource is None:
-        from app.config import get_settings
-        s = get_settings()
-        if s.datasource_type == "duckdb":
-            db_path = s.datasource_url or ":memory:"
-            _datasource = DuckDBDataSource(db_path, s.datasource_schema)
-        elif s.datasource_type == "mysql":
-            _datasource = MySQLDataSource(s.datasource_url)
-        elif s.datasource_type == "postgresql":
-            _datasource = PostgreSQLDataSource(s.datasource_url)
-        elif s.datasource_type == "clickhouse":
-            _datasource = ClickHouseDataSource(s.datasource_url)
+        from app.application.datasources.manager import get_manager
+        mgr = get_manager()
+        sources = mgr.list_sources()
+        if sources:
+            _datasource = mgr.get_source(sources[0]["name"])
         else:
-            raise ValueError(f"Unknown datasource type: {s.datasource_type}")
+            # Fallback to DuckDB demo
+            _datasource = DuckDBDataSource(":memory:", "main")
     return _datasource

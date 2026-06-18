@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.infrastructure import init_db
-from app.presentation.http.routes import responses_routes, sessions_routes, system_routes
+from app.presentation.http.routes import responses_routes, sessions_routes, system_routes, learn_routes, datasource_routes
 
 logger = logging.getLogger("chatsql")
 _settings = get_settings()
@@ -54,6 +54,9 @@ def create_app() -> FastAPI:
     app.include_router(system_routes.router, tags=["system"])
     app.include_router(responses_routes.router, tags=["responses"])
     app.include_router(sessions_routes.router, tags=["sessions"])
+    app.include_router(learn_routes.router, tags=["learn"])
+    app.include_router(datasource_routes.router, tags=["datasources"])
+
 
     # Root
     @app.get("/")

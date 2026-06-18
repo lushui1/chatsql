@@ -6,9 +6,9 @@ export default defineConfig({
   server: {
     port: 5180,
     proxy: {
-      '/v1': 'http://127.0.0.1:8020',
-      '/healthz': 'http://127.0.0.1:8020',
-      '/readyz': 'http://127.0.0.1:8020',
+      '/v1': 'http://127.0.0.1:8000',
+      '/healthz': 'http://127.0.0.1:8000',
+      '/readyz': 'http://127.0.0.1:8000',
     },
   },
 })

@@ -45,6 +45,7 @@ async def stream_response(
     input_items: list[dict],
     model: str,
     body,
+    session_id: str = "",
 ) -> AsyncGenerator[dict, None]:
     """Stream a response: emit created → in_progress → content → completed.
 
@@ -143,6 +144,16 @@ async def stream_response(
 
         # Persist the completed response
         await service.complete_response(ctx.response_id, output_items)
+
+        # Trigger learn extraction in background
+        asyncio.create_task(
+            service.trigger_learn_extraction(
+                ctx.response_id,
+                session_id,
+                input_items,
+                output_items,
+            )
+        )
 
     except Exception as e:
         yield {
