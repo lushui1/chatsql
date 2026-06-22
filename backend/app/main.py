@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.infrastructure import init_db
-from app.presentation.http.routes import responses_routes, sessions_routes, system_routes, learn_routes, datasource_routes
+from app.presentation.http.routes import responses_routes, sessions_routes, system_routes, learn_routes, datasource_routes, context_routes, dashboard_routes
 
 logger = logging.getLogger("chatsql")
 _settings = get_settings()
@@ -21,6 +21,8 @@ async def lifespan(app: FastAPI):
     """Startup: init DB. Shutdown: cleanup."""
     logger.info("ChatSQL starting up...")
     await init_db()
+    from app.infrastructure.persistence.context_store import init_context_db
+    await init_context_db()
     logger.info("Database initialized")
     yield
     logger.info("ChatSQL shutting down...")
@@ -56,6 +58,8 @@ def create_app() -> FastAPI:
     app.include_router(sessions_routes.router, tags=["sessions"])
     app.include_router(learn_routes.router, tags=["learn"])
     app.include_router(datasource_routes.router, tags=["datasources"])
+    app.include_router(context_routes.router, tags=["context"])
+    app.include_router(dashboard_routes.router, tags=["dashboards"])
 
 
     # Root

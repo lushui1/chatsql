@@ -120,3 +120,39 @@ class LearnAudit(Base):
     action = Column(String(32))  # created/activated/deprecated/superseded/hit
     detail = Column(Text, nullable=True)
     created_at = Column(Integer, default=_now)
+
+
+# ── Dashboard ──
+
+
+class Dashboard(Base):
+    """仪表盘"""
+
+    __tablename__ = "dashboards"
+
+    id = Column(String(64), primary_key=True)  # dash_<32hex>
+    name = Column(String(128), nullable=False)
+    description = Column(Text, default="")
+    layout = Column(String(16), default="grid")  # grid/free
+    created_at = Column(Integer, default=_now)
+    updated_at = Column(Integer, default=_now, onupdate=_now)
+
+
+class DashboardChart(Base):
+    """仪表盘中的图表"""
+
+    __tablename__ = "dashboard_charts"
+
+    id = Column(String(64), primary_key=True)  # chart_<32hex>
+    dashboard_id = Column(String(64), nullable=False, index=True)
+    title = Column(String(256), default="")
+    chart_type = Column(String(32), default="")  # column/bar/line/pie/table
+    config_json = Column(Text, nullable=True)  # JSON: chart config
+    data_json = Column(Text, nullable=True)  # JSON: chart data (columns, rows)
+    sql_text = Column(Text, nullable=True)  # source SQL
+    datasource = Column(String(128), default="")  # source datasource
+    created_at = Column(Integer, default=_now)
+
+
+# Indices
+Index("ix_dashboard_charts_dashboard", DashboardChart.dashboard_id)

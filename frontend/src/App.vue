@@ -1,235 +1,245 @@
 <template>
   <div class="app-layout">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h1 class="logo">ChatSQL</h1>
-        <div class="header-actions">
-          <button class="icon-btn-header" @click="showSettings = true" title="设置">⚙️</button>
-          <button class="icon-btn-header" @click="toggleTheme" :title="theme === 'light' ? '切换深色' : '切换浅色'">
-            {{ theme === 'light' ? '🌙' : '☀️' }}
-          </button>
-        </div>
-        <button class="new-chat-btn" @click="createNewSession">+ 新对话</button>
-      </div>
-      <div class="session-list">
-        <div
-          v-for="s in sessions"
-          :key="s.id"
-          class="session-item"
-          :class="{ active: s.id === currentSessionId }"
-          @click="selectSession(s.id)"
-        >
-          <span class="session-title">{{ s.title }}</span>
-          <span v-if="s.streaming" class="streaming-dot"></span>
-        </div>
-        <div v-if="sessions.length === 0" class="empty-hint">
-          暂无对话，点击上方开始
-        </div>
-      </div>
-      <div class="sidebar-footer">
-        <div class="mode-toggle">
-          <button
-            :class="{ active: mode === 'fast' }"
-            @click="mode = 'fast'"
-          >快速</button>
-          <button
-            :class="{ active: mode === 'think' }"
-            @click="mode = 'think'"
-          >深度</button>
-        </div>
-      </div>
-    </aside>
+    <!-- Navigation Sidebar -->
+    <Sidebar
+      :currentView="currentView"
+      :isDark="theme === 'dark'"
+      @navigate="currentView = $event"
+      @toggle-theme="toggleTheme"
+    />
 
-    <!-- Main Chat Area -->
-    <main class="chat-area">
-      <!-- Messages -->
-      <div class="messages" ref="messagesRef">
-        <div
-          v-for="turn in turns"
-          :key="turn.response_id"
-          class="turn"
-        >
-          <!-- User message (RIGHT) -->
-          <div class="msg-row user-row" v-if="getUserText(turn.request_input)">
-            <div class="bubble user-bubble">
-              <div class="bubble-avatar">🧑</div>
-              <div class="bubble-content">
-                {{ getUserText(turn.request_input) }}
+    <!-- Chat View -->
+    <template v-if="currentView === 'chat'">
+      <!-- Session Sidebar -->
+      <aside class="session-sidebar">
+        <div class="sidebar-header">
+          <button class="new-chat-btn" @click="createNewSession">+ 新对话</button>
+          <div class="mode-toggle">
+            <button
+              :class="{ active: mode === 'fast' }"
+              @click="mode = 'fast'"
+            >⚡ 快速</button>
+            <button
+              :class="{ active: mode === 'think' }"
+              @click="mode = 'think'"
+            >🧠 深度</button>
+          </div>
+        </div>
+        <div class="session-list">
+          <div
+            v-for="s in sessions"
+            :key="s.id"
+            class="session-item"
+            :class="{ active: s.id === currentSessionId }"
+            @click="selectSession(s.id)"
+          >
+            <span class="session-title">{{ s.title }}</span>
+            <span v-if="s.streaming" class="streaming-dot"></span>
+          </div>
+          <div v-if="sessions.length === 0" class="empty-hint">
+            暂无对话，点击上方开始
+          </div>
+        </div>
+      </aside>
+
+      <!-- Main Chat Area -->
+      <main class="chat-area">
+        <!-- Messages -->
+        <div class="messages" ref="messagesRef">
+          <div
+            v-for="turn in turns"
+            :key="turn.response_id"
+            class="turn"
+          >
+            <!-- User message (RIGHT) -->
+            <div class="msg-row user-row" v-if="getUserText(turn.request_input)">
+              <div class="bubble user-bubble">
+                <div class="bubble-avatar">🧑</div>
+                <div class="bubble-content">
+                  {{ getUserText(turn.request_input) }}
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- Assistant section (LEFT) -->
-          <div class="msg-row assistant-row">
-            <div class="bubble assistant-bubble">
-              <div class="bubble-avatar">🤖</div>
-              <div class="bubble-content">
-                <!-- Tool calls -->
-                <template v-for="item in turn.output.filter(o => o.type === 'function_call')" :key="item.id">
-                  <!-- Planning -->
-                  <div v-if="item.name === 'planning'" class="tool-card planning-card">
-                    <div class="tool-header" @click="item._open = !item._open">
-                      <span class="tool-icon">📋</span>
-                      <span class="tool-name">分析规划</span>
-                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
-                    </div>
-                    <div class="tool-body" v-if="item._open !== false">
-                      <template v-if="parseArgs(item.arguments).overview">
-                        <p class="overview">{{ parseArgs(item.arguments).overview }}</p>
-                      </template>
-                      <div
-                        v-for="step in parseArgs(item.arguments).steps || []"
-                        :key="step.id"
-                        class="step"
-                      >
-                        <span class="step-num">{{ step.id }}</span>
-                        <span class="step-title">{{ step.title }}</span>
+            <!-- Assistant section (LEFT) -->
+            <div class="msg-row assistant-row">
+              <div class="bubble assistant-bubble">
+                <div class="bubble-avatar">🤖</div>
+                <div class="bubble-content">
+                  <!-- Tool calls -->
+                  <template v-for="item in turn.output.filter(o => o.type === 'function_call')" :key="item.id">
+                    <!-- Planning -->
+                    <div v-if="item.name === 'planning'" class="tool-card planning-card">
+                      <div class="tool-header" @click="item._open = !item._open">
+                        <span class="tool-icon">📋</span>
+                        <span class="tool-name">分析规划</span>
+                        <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                      </div>
+                      <div class="tool-body" v-if="item._open !== false">
+                        <template v-if="parseArgs(item.arguments).overview">
+                          <p class="overview">{{ parseArgs(item.arguments).overview }}</p>
+                        </template>
+                        <div
+                          v-for="step in parseArgs(item.arguments).steps || []"
+                          :key="step.id"
+                          class="step"
+                        >
+                          <span class="step-num">{{ step.id }}</span>
+                          <span class="step-title">{{ step.title }}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <!-- Chart -->
-                  <div v-else-if="item.name === 'smartbot_chart'" class="tool-card chart-card">
-                    <div class="tool-header">
-                      <span class="tool-icon">📊</span>
-                      <span class="tool-name">数据图表</span>
+                    <!-- Chart -->
+                    <div v-else-if="item.name === 'smartbot_chart'" class="tool-card chart-card">
+                      <div class="tool-header">
+                        <span class="tool-icon">📊</span>
+                        <span class="tool-name">数据图表</span>
+                        <button class="save-chart-btn" @click="saveChartToDashboard(item)" title="保存到仪表盘">💾</button>
+                      </div>
+                      <div class="tool-body">
+                        <ChartCard :args="parseArgs(item.arguments)" />
+                      </div>
                     </div>
-                    <div class="tool-body">
-                      <ChartCard :args="parseArgs(item.arguments)" />
-                    </div>
-                  </div>
 
-                  <!-- Clarification -->
-                  <div v-else-if="item.name === 'ask_clarification'" class="tool-card clarification-card">
-                    <div class="tool-header">
-                      <span class="tool-icon">❓</span>
-                      <span class="tool-name">追问</span>
+                    <!-- Clarification -->
+                    <div v-else-if="item.name === 'ask_clarification'" class="tool-card clarification-card">
+                      <div class="tool-header">
+                        <span class="tool-icon">❓</span>
+                        <span class="tool-name">追问</span>
+                      </div>
+                      <div class="tool-body">
+                        <p>{{ parseArgs(item.arguments).question }}</p>
+                      </div>
                     </div>
-                    <div class="tool-body">
-                      <p>{{ parseArgs(item.arguments).question }}</p>
-                    </div>
-                  </div>
 
-                  <!-- Subscription -->
-                  <div v-else-if="item.name === 'propose_subscription'" class="tool-card subscription-card">
-                    <div class="tool-header">
-                      <span class="tool-icon">🔔</span>
-                      <span class="tool-name">订阅建议</span>
+                    <!-- Subscription -->
+                    <div v-else-if="item.name === 'propose_subscription'" class="tool-card subscription-card">
+                      <div class="tool-header">
+                        <span class="tool-icon">🔔</span>
+                        <span class="tool-name">订阅建议</span>
+                      </div>
+                      <div class="tool-body">
+                        <p>{{ parseArgs(item.arguments).message || '建议创建定时推送' }}</p>
+                      </div>
                     </div>
-                    <div class="tool-body">
-                      <p>{{ parseArgs(item.arguments).message || '建议创建定时推送' }}</p>
-                    </div>
-                  </div>
 
-                  <!-- Execute SQL -->
-                  <div v-else-if="item.name === 'execute_sql'" class="tool-card sql-card">
-                    <div class="tool-header" @click="item._open = !item._open">
-                      <span class="tool-icon">🗃️</span>
-                      <span class="tool-name">SQL 查询</span>
-                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
-                    </div>
-                    <div class="tool-body" v-if="item._open !== false">
-                      <pre class="sql-code">{{ parseArgs(item.arguments).sql }}</pre>
-                      <div v-if="item._result" class="sql-result">
-                        <div class="result-meta">
-                          <span>✅ {{ item._result.row_count ?? item._result.rows?.length ?? 0 }} 条结果</span>
-                        </div>
-                        <div class="result-table-wrap" v-if="item._result.columns?.length">
-                          <table class="result-table">
-                            <thead>
-                              <tr>
-                                <th v-for="col in item._result.columns" :key="col.name">{{ col.name }}</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              <tr v-for="(row, ri) in (item._result.rows || []).slice(0, 100)" :key="ri">
-                                <td v-for="col in item._result.columns" :key="col.name">{{ row[col.name] ?? '' }}</td>
-                              </tr>
-                            </tbody>
-                          </table>
-                          <div v-if="(item._result.rows?.length || 0) > 100" class="result-more">
-                            显示前 100 条，共 {{ item._result.rows.length }} 条
+                    <!-- Execute SQL -->
+                    <div v-else-if="item.name === 'execute_sql'" class="tool-card sql-card">
+                      <div class="tool-header" @click="item._open = !item._open">
+                        <span class="tool-icon">🗃️</span>
+                        <span class="tool-name">SQL 查询</span>
+                        <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                      </div>
+                      <div class="tool-body" v-if="item._open !== false">
+                        <pre class="sql-code">{{ parseArgs(item.arguments).sql }}</pre>
+                        <div v-if="item._result" class="sql-result">
+                          <div class="result-meta">
+                            <span>✅ {{ item._result.row_count ?? item._result.rows?.length ?? 0 }} 条结果</span>
+                          </div>
+                          <div class="result-table-wrap" v-if="item._result.columns?.length">
+                            <table class="result-table">
+                              <thead>
+                                <tr>
+                                  <th v-for="col in item._result.columns" :key="col.name">{{ col.name }}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr v-for="(row, ri) in (item._result.rows || []).slice(0, 100)" :key="ri">
+                                  <td v-for="col in item._result.columns" :key="col.name">{{ row[col.name] ?? '' }}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            <div v-if="(item._result.rows?.length || 0) > 100" class="result-more">
+                              显示前 100 条，共 {{ item._result.rows.length }} 条
+                            </div>
+                          </div>
+                          <div v-if="item._result.error" class="result-error">
+                            ❌ {{ item._result.error }}
                           </div>
                         </div>
-                        <div v-if="item._result.error" class="result-error">
-                          ❌ {{ item._result.error }}
-                        </div>
+                        <div v-else class="sql-loading">执行中...</div>
                       </div>
-                      <div v-else class="sql-loading">执行中...</div>
                     </div>
-                  </div>
 
-                  <!-- Generic tool call -->
-                  <div v-else class="tool-card generic-card">
-                    <div class="tool-header" @click="item._open = !item._open">
-                      <span class="tool-icon">🔧</span>
-                      <span class="tool-name">{{ item.name || '工具调用' }}</span>
-                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                    <!-- Generic tool call -->
+                    <div v-else class="tool-card generic-card">
+                      <div class="tool-header" @click="item._open = !item._open">
+                        <span class="tool-icon">🔧</span>
+                        <span class="tool-name">{{ item.name || '工具调用' }}</span>
+                        <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                      </div>
+                      <div class="tool-body" v-if="item._open">
+                        <pre class="tool-args">{{ JSON.stringify(parseArgs(item.arguments), null, 2) }}</pre>
+                      </div>
                     </div>
-                    <div class="tool-body" v-if="item._open">
-                      <pre class="tool-args">{{ JSON.stringify(parseArgs(item.arguments), null, 2) }}</pre>
-                    </div>
-                  </div>
-                </template>
+                  </template>
 
-                <!-- Assistant text -->
-                <div
-                  class="assistant-text"
-                  v-for="item in turn.output.filter(o => o.type === 'message')"
-                  :key="item.id"
-                >
-                  {{ getOutputText(item) }}
+                  <!-- Assistant text -->
+                  <div
+                    class="assistant-text"
+                    v-for="item in turn.output.filter(o => o.type === 'message')"
+                    :key="item.id"
+                  >
+                    {{ getOutputText(item) }}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- Streaming indicator -->
-        <div v-if="isStreaming" class="msg-row assistant-row">
-          <div class="bubble assistant-bubble">
-            <div class="bubble-avatar">🤖</div>
-            <div class="bubble-content">
-              <span class="streaming-dots"><span></span><span></span><span></span></span>
+          <!-- Streaming indicator -->
+          <div v-if="isStreaming" class="msg-row assistant-row">
+            <div class="bubble assistant-bubble">
+              <div class="bubble-avatar">🤖</div>
+              <div class="bubble-content">
+                <span class="streaming-dots"><span></span><span></span><span></span></span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- Input area -->
-      <div class="input-area">
-        <div class="suggested" v-if="suggested.length && turns.length === 0">
-          <button
-            v-for="q in suggested"
-            :key="q"
-            class="suggested-btn"
-            @click="sendMessage(q)"
-          >{{ q }}</button>
+        <!-- Input area -->
+        <div class="input-area">
+          <div class="suggested" v-if="suggested.length && turns.length === 0">
+            <button
+              v-for="q in suggested"
+              :key="q"
+              class="suggested-btn"
+              @click="sendMessage(q)"
+            >{{ q }}</button>
+          </div>
+          <div class="input-row">
+            <input
+              v-model="userInput"
+              placeholder="输入你的问题..."
+              @keydown.enter="sendMessage()"
+              :disabled="isStreaming"
+            />
+            <button class="primary" @click="sendMessage()" :disabled="isStreaming || !userInput.trim()">
+              发送
+            </button>
+          </div>
         </div>
-        <div class="input-row">
-          <input
-            v-model="userInput"
-            placeholder="输入你的问题..."
-            @keydown.enter="sendMessage()"
-            :disabled="isStreaming"
-          />
-          <button class="primary" @click="sendMessage()" :disabled="isStreaming || !userInput.trim()">
-            发送
-          </button>
-        </div>
-      </div>
-    </main>
+      </main>
+    </template>
 
-    <!-- Settings Panel -->
-    <SettingsView v-if="showSettings" @close="showSettings = false" />
+    <!-- Dashboard View -->
+    <DashboardView v-else-if="currentView === 'dashboard'" />
+
+    <!-- Settings View -->
+    <div v-else-if="currentView === 'settings'" class="settings-view">
+      <SettingsView @close="currentView = 'chat'" />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick, watch } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import ChartCard from './components/ChartCard.vue'
 import SettingsView from './components/SettingsView.vue'
+import Sidebar from './components/Sidebar.vue'
+import DashboardView from './components/DashboardView.vue'
 
 interface Session {
   id: string
@@ -255,8 +265,8 @@ const isStreaming = ref(false)
 const mode = ref<'fast' | 'think'>('fast')
 const suggested = ref<string[]>([])
 const messagesRef = ref<HTMLElement>()
-const showSettings = ref(false)
 const theme = ref<'light' | 'dark'>('light')
+const currentView = ref<'chat' | 'dashboard' | 'settings'>('chat')
 
 // Theme toggle
 function toggleTheme() {
@@ -302,7 +312,6 @@ async function loadSuggested() {
 }
 
 async function createNewSession() {
-  // Session is created on first message — just clear state
   currentSessionId.value = ''
   turns.value = []
   userInput.value = ''
@@ -310,12 +319,10 @@ async function createNewSession() {
 
 async function selectSession(sessionId: string) {
   currentSessionId.value = sessionId
-  // Load turns
   try {
     const res = await fetch(`${API}/sessions/${sessionId}/response-turns`)
     const data = await res.json()
     turns.value = data.turns || []
-    // Set mode from session
     const s = sessions.value.find(s => s.id === sessionId)
     if (s?.mode) mode.value = s.mode as 'fast' | 'think'
     await scrollToBottom()
@@ -332,7 +339,6 @@ async function sendMessage(text?: string) {
   userInput.value = ''
   isStreaming.value = true
 
-  // Optimistic: add user message to UI
   const tempTurn: Turn = {
     response_id: `temp_${Date.now()}`,
     request_input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: content }] }],
@@ -355,19 +361,14 @@ async function sendMessage(text?: string) {
     const res = await fetch(`${API}/responses`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        input: content,
-        stream: true,
-      }),
+      body: JSON.stringify({ input: content, stream: true }),
     })
 
-    // Extract session ID from headers
     const sessionId = res.headers.get('X-Session-Id')
     if (sessionId && !currentSessionId.value) {
       currentSessionId.value = sessionId
     }
 
-    // Read SSE stream
     const reader = res.body!.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -396,7 +397,6 @@ async function sendMessage(text?: string) {
             tempTurn.response_id = responseId
           } else if (event.type === 'response.output_text.delta') {
             currentText += event.delta
-            // Update or create message item
             let msgItem = outputItems.find(o => o.type === 'message')
             if (!msgItem) {
               msgItem = {
@@ -412,14 +412,13 @@ async function sendMessage(text?: string) {
             }
             tempTurn.output = [...outputItems]
           } else if (event.type === 'response.function_call_arguments.done') {
-            // Find or create function call item
             let fcItem = outputItems.find(o => o.type === 'function_call' && o.call_id === event.call_id)
             if (!fcItem) {
               fcItem = {
                 type: 'function_call',
                 id: `fc_${responseId}_${outputItems.length}`,
                 call_id: event.call_id,
-                name: '', // Will be set from earlier event
+                name: '',
                 arguments: event.arguments,
                 status: 'completed',
               }
@@ -434,7 +433,6 @@ async function sendMessage(text?: string) {
               tempTurn.output = [...outputItems]
             }
           } else if (event.type === 'tool_result') {
-            // SQL execution result — attach to the matching function_call item
             let fcItem = outputItems.find(o => o.type === 'function_call' && o.call_id === event.call_id)
             if (fcItem) {
               fcItem._result = event.result
@@ -445,17 +443,15 @@ async function sendMessage(text?: string) {
             tempTurn.output = [...outputItems]
           }
         } catch (e) {
-          // Ignore parse errors for partial JSON
+          // Ignore parse errors
         }
       }
       await scrollToBottom()
     }
 
-    // Reload sessions to get updated titles
     await loadSessions()
   } catch (e) {
     console.error('Failed to send message', e)
-    // Show error in UI
     tempTurn.output.push({
       type: 'message',
       id: `err_${Date.now()}`,
@@ -466,6 +462,45 @@ async function sendMessage(text?: string) {
   } finally {
     isStreaming.value = false
     await scrollToBottom()
+  }
+}
+
+// ── Save chart to dashboard ──
+async function saveChartToDashboard(item: any) {
+  const args = parseArgs(item.arguments)
+  try {
+    // First get or create a default dashboard
+    const listRes = await fetch(`${API}/dashboards`)
+    let dashboards = await listRes.json()
+    let dashboardId = dashboards[0]?.id
+
+    if (!dashboardId) {
+      const createRes = await fetch(`${API}/dashboards`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '默认仪表盘' }),
+      })
+      const d = await createRes.json()
+      dashboardId = d.id
+    }
+
+    await fetch(`${API}/dashboards/save-chart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        dashboard_id: dashboardId,
+        chart_data: {
+          title: args.chart?.title || '图表',
+          chart_type: args.chart?.type || 'table',
+          config: args,
+          data: args.data || {},
+          sql: args.sql || '',
+        },
+      }),
+    })
+    alert('✅ 已保存到仪表盘')
+  } catch (e) {
+    console.error('Failed to save chart', e)
   }
 }
 
@@ -484,11 +519,7 @@ function getOutputText(item: any): string {
 }
 
 function parseArgs(args: string): any {
-  try {
-    return JSON.parse(args)
-  } catch {
-    return {}
-  }
+  try { return JSON.parse(args) } catch { return {} }
 }
 
 async function scrollToBottom() {
@@ -503,54 +534,74 @@ async function scrollToBottom() {
 .app-layout {
   display: flex;
   height: 100%;
+  overflow: hidden;
 }
 
-/* Sidebar */
-.sidebar {
-  width: 260px;
+/* Session Sidebar */
+.session-sidebar {
+  width: 240px;
   background: var(--bg-secondary);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
 }
+
 .sidebar-header {
   padding: 16px;
   border-bottom: 1px solid var(--border);
 }
-.logo {
-  font-size: 18px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #2563eb, #3b82f6);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.header-actions {
-  display: flex;
-  gap: 4px;
-  margin-bottom: 12px;
-}
-.icon-btn-header {
-  background: none;
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  cursor: pointer;
-  border-radius: var(--radius);
-  font-size: 14px;
-}
-.icon-btn-header:hover {
-  background: var(--bg-tertiary);
-}
+
 .new-chat-btn {
   width: 100%;
   text-align: left;
   padding: 10px 14px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 14px;
+  margin-bottom: 10px;
+  transition: background 0.2s;
 }
+
+.new-chat-btn:hover {
+  background: var(--accent-hover);
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.mode-toggle button {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+}
+
+.mode-toggle button.active {
+  background: var(--bg-primary);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
 .session-list {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
 }
+
 .session-item {
   padding: 10px 12px;
   border-radius: var(--radius);
@@ -558,51 +609,45 @@ async function scrollToBottom() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 4px;
   transition: background 0.2s;
-}
-.session-item:hover {
-  background: var(--bg-tertiary);
-}
-.session-item.active {
-  background: var(--accent-light);
-  border: 1px solid var(--accent);
-}
-.session-title {
   font-size: 13px;
-  white-space: nowrap;
+}
+
+.session-item:hover {
+  background: var(--bg-hover);
+}
+
+.session-item.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.session-title {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
+
 .streaming-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--success);
+  background: #22c55e;
   animation: pulse 1.5s infinite;
+  flex-shrink: 0;
 }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 .empty-hint {
-  color: var(--text-muted);
-  font-size: 13px;
   text-align: center;
-  padding: 20px;
-}
-.sidebar-footer {
-  padding: 12px;
-  border-top: 1px solid var(--border);
-}
-.mode-toggle {
-  display: flex;
-  gap: 4px;
-}
-.mode-toggle button {
-  flex: 1;
-  padding: 6px;
-  font-size: 12px;
-}
-.mode-toggle button.active {
-  background: var(--accent);
-  color: white;
+  color: var(--text-muted);
+  padding: 32px 16px;
+  font-size: 13px;
 }
 
 /* Chat Area */
@@ -612,257 +657,321 @@ async function scrollToBottom() {
   flex-direction: column;
   min-width: 0;
 }
+
 .messages {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
-  max-width: 900px;
-  width: 100%;
-  margin: 0 auto;
+  scroll-behavior: smooth;
 }
 
-/* Turn */
-.turn { margin-bottom: 24px; }
+.turn {
+  margin-bottom: 20px;
+}
 
-/* Message rows */
-.msg-row { display: flex; margin-bottom: 8px; }
-.user-row { justify-content: flex-end; }
-.assistant-row { justify-content: flex-start; }
+.msg-row {
+  display: flex;
+  margin-bottom: 8px;
+}
 
-/* Bubbles */
-.bubble { display: flex; gap: 10px; max-width: 85%; }
-.user-row .bubble { flex-direction: row-reverse; }
+.user-row {
+  justify-content: flex-end;
+}
+
+.assistant-row {
+  justify-content: flex-start;
+}
+
+.bubble {
+  display: flex;
+  gap: 10px;
+  max-width: 85%;
+}
+
 .bubble-avatar {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px;
+  font-size: 20px;
   flex-shrink: 0;
-  background: var(--bg-tertiary);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.bubble-content { flex: 1; min-width: 0; }
 
-/* User bubble */
-.user-bubble .bubble-content {
-  background: var(--accent);
-  color: white;
+.bubble-content {
   padding: 12px 16px;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: 16px;
   font-size: 14px;
   line-height: 1.6;
   word-break: break-word;
 }
 
-/* Assistant bubble */
+.user-bubble {
+  flex-direction: row-reverse;
+}
+
+.user-bubble .bubble-content {
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 4px;
+}
+
 .assistant-bubble .bubble-content {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
-  padding: 16px;
-  border-radius: 16px 16px 16px 4px;
-  font-size: 14px;
-  line-height: 1.7;
-}
-.assistant-text {
-  white-space: pre-wrap;
-  word-break: break-word;
+  border-bottom-left-radius: 4px;
+  width: 100%;
+  min-width: 0;
 }
 
 /* Tool cards */
 .tool-card {
-  margin-bottom: 12px;
-  border: 1px solid var(--border);
+  margin: 8px 0;
   border-radius: var(--radius);
   overflow: hidden;
+  border: 1px solid var(--border);
 }
+
 .tool-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  background: var(--bg-tertiary);
+  padding: 8px 12px;
   cursor: pointer;
   user-select: none;
-  font-size: 13px;
-  font-weight: 600;
 }
-.tool-icon { font-size: 15px; }
-.tool-name { flex: 1; color: var(--text-secondary); }
+
+.tool-icon { font-size: 16px; }
+.tool-name { font-size: 13px; font-weight: 600; flex: 1; }
 .tool-toggle { font-size: 11px; color: var(--text-muted); }
-.tool-body { padding: 12px 14px; }
-.tool-args {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px;
-  font-size: 12px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  overflow-x: auto;
-  color: var(--text-primary);
-  margin: 0;
-  max-height: 300px;
-  overflow-y: auto;
-}
 
-/* Planning card */
-.planning-card .tool-header { background: rgba(59, 130, 246, 0.08); }
-.planning-card .tool-name { color: #3b82f6; }
-.overview { color: var(--text-secondary); margin-bottom: 12px; font-size: 13px; }
-.step { display: flex; gap: 10px; padding: 6px 0; }
-.step-num {
-  width: 24px; height: 24px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: white;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.step-title { font-size: 13px; }
-
-/* Chart card */
-.chart-card .tool-header { background: rgba(16, 185, 129, 0.08); }
-.chart-card .tool-name { color: #10b981; }
-
-/* Clarification card */
-.clarification-card { border-color: var(--warning); }
-.clarification-card .tool-header { background: rgba(245, 158, 11, 0.08); }
-.clarification-card .tool-name { color: #f59e0b; }
-
-/* Subscription card */
-.subscription-card .tool-header { background: rgba(139, 92, 246, 0.08); }
-.subscription-card .tool-name { color: #8b5cf6; }
-
-/* Generic tool card */
-.generic-card .tool-header { background: var(--bg-tertiary); }
-
-/* SQL card */
-.sql-card .tool-header { background: rgba(139, 92, 246, 0.08); }
-.sql-card .tool-name { color: #8b5cf6; }
-.sql-code {
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px 12px;
+.tool-body {
+  padding: 8px 12px 12px;
   font-size: 13px;
-  font-family: 'SF Mono', 'Fira Code', monospace;
-  overflow-x: auto;
-  color: var(--text-primary);
-  margin: 0 0 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  border-top: 1px solid var(--border);
 }
+
+.planning-card { background: #eff6ff; border-color: #bfdbfe; }
+.chart-card { background: #f0fdf4; border-color: #bbf7d0; }
+.clarification-card { background: #fefce8; border-color: #fde68a; }
+.subscription-card { background: #faf5ff; border-color: #e9d5ff; }
+.sql-card { background: #f8fafc; border-color: #cbd5e1; }
+.generic-card { background: var(--bg-tertiary); }
+
+.overview {
+  margin: 0 0 8px;
+  font-weight: 500;
+  color: #1e40af;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.step-num {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #2563eb;
+  color: white;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+}
+
+.step-title {
+  font-size: 13px;
+}
+
+.sql-code {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
 .sql-result { margin-top: 8px; }
+
 .result-meta {
   font-size: 12px;
-  color: var(--text-muted);
+  color: #16a34a;
   margin-bottom: 8px;
 }
+
 .result-table-wrap {
-  max-height: 360px;
+  max-height: 300px;
   overflow: auto;
+  border-radius: 8px;
   border: 1px solid var(--border);
-  border-radius: 6px;
 }
+
 .result-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
+
 .result-table th {
-  background: var(--bg-tertiary);
-  padding: 8px 10px;
-  text-align: left;
-  font-weight: 600;
   position: sticky;
   top: 0;
-  z-index: 1;
-  white-space: nowrap;
-}
-.result-table td {
+  background: var(--bg-tertiary);
   padding: 6px 10px;
-  border-top: 1px solid var(--border);
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+.result-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
   max-width: 200px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
 .result-table tr:hover td {
-  background: var(--bg-secondary);
+  background: var(--bg-hover);
 }
+
 .result-more {
   text-align: center;
-  padding: 8px;
-  font-size: 12px;
+  padding: 6px;
+  font-size: 11px;
   color: var(--text-muted);
 }
+
 .result-error {
-  color: #ef4444;
+  color: #dc2626;
   font-size: 13px;
   padding: 8px;
-  background: rgba(239, 68, 68, 0.08);
+  background: #fef2f2;
   border-radius: 6px;
 }
+
 .sql-loading {
   color: var(--text-muted);
   font-size: 13px;
-  padding: 8px;
-  animation: pulse 1.5s infinite;
+  padding: 8px 0;
+}
+
+.tool-args {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.assistant-text {
+  padding: 4px 0;
+  white-space: pre-wrap;
+}
+
+.save-chart-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
+
+.save-chart-btn:hover {
+  background: rgba(0,0,0,0.08);
 }
 
 /* Streaming dots */
-.streaming-dots { display: flex; gap: 4px; padding: 4px 0; }
+.streaming-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+
 .streaming-dots span {
-  width: 6px; height: 6px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--text-muted);
   animation: blink 1.4s infinite both;
 }
+
 .streaming-dots span:nth-child(2) { animation-delay: 0.2s; }
 .streaming-dots span:nth-child(3) { animation-delay: 0.4s; }
+
 @keyframes blink {
   0%, 80%, 100% { opacity: 0.3; }
   40% { opacity: 1; }
 }
 
-/* Streaming */
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
-@keyframes bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
-  40% { transform: scale(1); opacity: 1; }
-}
-
-/* Input */
+/* Input area */
 .input-area {
   padding: 16px 24px;
   border-top: 1px solid var(--border);
-  max-width: 900px;
-  width: 100%;
-  margin: 0 auto;
+  background: var(--bg-primary);
 }
+
 .suggested {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
 }
+
 .suggested-btn {
-  font-size: 12px;
-  padding: 6px 12px;
-  background: var(--bg-secondary);
+  padding: 8px 16px;
   border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
 }
+
 .suggested-btn:hover {
   border-color: var(--accent);
+  color: var(--accent);
 }
+
 .input-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
 }
+
 .input-row input {
   flex: 1;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  background: var(--bg-primary);
+  transition: border-color 0.2s;
+}
+
+.input-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.input-row button.primary {
+  padding: 12px 28px;
+}
+
+/* Settings view */
+.settings-view {
+  flex: 1;
+  overflow-y: auto;
 }
 </style>

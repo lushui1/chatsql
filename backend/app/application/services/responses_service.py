@@ -50,7 +50,7 @@ class ResponsesService:
                 result.append(item)
         return result
 
-    def _build_system_prompt(self, instructions: str | None = None, learn_context: str = "") -> str:
+    async def _build_system_prompt(self, user_query: str = "", instructions: str | None = None, learn_context: str = "") -> str:
         """Build system prompt with auto-fetched datasource metadata and learn context."""
         base = (
             "你是 ChatSQL 智能问数助手。用户会用自然语言提问，你需要：\n"
@@ -94,6 +94,25 @@ class ResponsesService:
                 "字段: center_name(中心名称), volume(货量)\n\n"
             )
 
+        # RAG: inject business context
+        if user_query:
+            try:
+                from app.application.rag_service import retrieve_context, build_context_prompt
+                rag_result = await retrieve_context(user_query)
+                rag_prompt = build_context_prompt(rag_result)
+                if rag_prompt:
+                    base += f"{rag_prompt}\n"
+            except Exception as e:
+                logger.warning(f"RAG context retrieval failed: {e}")
+
+        # SQL safety rules
+        base += (
+            "## SQL 安全规则\n"
+            "- 只允许 SELECT 查询，禁止 INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE\n"
+            "- 禁止执行多条 SQL 语句\n"
+            "- 子查询嵌套不超过 3 层\n\n"
+        )
+
         if learn_context:
             base += f"{learn_context}\n"
         if instructions:
@@ -119,6 +138,13 @@ class ResponsesService:
 
     async def _execute_sql(self, sql: str, datasource: str | None = None, limit: int = 1000) -> dict:
         """Execute SQL against a data source and return results."""
+        # SQL safety validation
+        from app.application.sql_validator import SQLValidator
+        validator = SQLValidator()
+        is_safe, reason = validator.validate(sql)
+        if not is_safe:
+            return {"error": f"SQL 安全校验不通过: {reason}", "columns": [], "rows": [], "row_count": 0}
+
         from app.application.datasources.manager import get_manager
         mgr = get_manager()
 
@@ -170,7 +196,7 @@ class ResponsesService:
                 logger.warning(f"Learn context build failed: {e}")
 
         # Build initial messages
-        system_prompt = self._build_system_prompt(instructions, learn_context)
+        system_prompt = await self._build_system_prompt(user_query, instructions, learn_context)
         messages = [{"role": "system", "content": system_prompt}]
         for item in input_items:
             if item.get("type") == "message":

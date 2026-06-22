@@ -146,6 +146,84 @@
           </div>
         </div>
 
+        <!-- Tables Tab -->
+        <div v-if="activeTab === 'tables'" class="tab-content">
+          <div class="section-header">
+            <h3>表管理</h3>
+            <button class="small-btn" @click="loadTables">刷新</button>
+          </div>
+          <p class="tab-hint">配置表的显示名、描述、隐藏状态，帮助 AI 更好地理解你的数据。</p>
+          <div class="table-list">
+            <div v-for="t in contextTables" :key="t.name" class="table-row">
+              <div class="table-row-main">
+                <span class="table-name">{{ t.name }}</span>
+                <span class="table-display" v-if="t.display_name">{{ t.display_name }}</span>
+              </div>
+              <div class="table-row-edit">
+                <input v-model="t.display_name" placeholder="显示名（中文别名）" class="inline-input" />
+                <input v-model="t.description" placeholder="业务描述" class="inline-input wide" />
+                <label class="inline-check">
+                  <input type="checkbox" v-model="t.hidden" /> 隐藏
+                </label>
+                <button class="small-btn" @click="saveTableMeta(t)">保存</button>
+              </div>
+            </div>
+            <div v-if="contextTables.length === 0" class="empty-hint">暂无表数据，请先配置数据源</div>
+          </div>
+        </div>
+
+        <!-- Examples Tab -->
+        <div v-if="activeTab === 'examples'" class="tab-content">
+          <div class="section-header">
+            <h3>示例 SQL</h3>
+            <button class="small-btn" @click="showAddExample = true">+ 添加示例</button>
+          </div>
+          <p class="tab-hint">提供“问题→SQL”示例，AI 会参考这些示例生成更准确的 SQL。</p>
+          <div v-if="showAddExample" class="add-form">
+            <input v-model="newExample.question" placeholder="用户问题" />
+            <textarea v-model="newExample.sql" placeholder="标准 SQL" rows="3"></textarea>
+            <input v-model="newExample.description" placeholder="说明（可选）" />
+            <div class="form-actions">
+              <button class="small-btn" @click="addExample">保存</button>
+              <button class="small-btn secondary" @click="showAddExample = false">取消</button>
+            </div>
+          </div>
+          <div class="example-list">
+            <div v-for="e in examples" :key="e.id" class="example-item">
+              <div class="example-q">Q: {{ e.question }}</div>
+              <pre class="example-sql">{{ e.sql }}</pre>
+              <button class="delete-btn" @click="deleteExample(e.id)">删除</button>
+            </div>
+            <div v-if="examples.length === 0 && !showAddExample" class="empty-hint">暂无示例，点击上方添加</div>
+          </div>
+        </div>
+
+        <!-- Terminology Tab -->
+        <div v-if="activeTab === 'terminology'" class="tab-content">
+          <div class="section-header">
+            <h3>术语库</h3>
+            <button class="small-btn" @click="showAddTerm = true">+ 添加术语</button>
+          </div>
+          <p class="tab-hint">定义业务术语，帮助 AI 理解领域专有词汇。</p>
+          <div v-if="showAddTerm" class="add-form">
+            <input v-model="newTerm.term" placeholder="术语" />
+            <input v-model="newTerm.definition" placeholder="定义/映射规则" />
+            <input v-model="newTerm.description" placeholder="详细说明（可选）" />
+            <div class="form-actions">
+              <button class="small-btn" @click="addTerm">保存</button>
+              <button class="small-btn secondary" @click="showAddTerm = false">取消</button>
+            </div>
+          </div>
+          <div class="term-list">
+            <div v-for="t in terms" :key="t.id" class="term-item">
+              <span class="term-name">{{ t.term }}</span>
+              <span class="term-def">{{ t.definition }}</span>
+              <button class="delete-btn" @click="deleteTerm(t.id)">删除</button>
+            </div>
+            <div v-if="terms.length === 0 && !showAddTerm" class="empty-hint">暂无术语，点击上方添加</div>
+          </div>
+        </div>
+
         <!-- System Info Tab -->
         <div v-if="activeTab === 'system'" class="tab-content">
           <h3>系统信息</h3>
@@ -175,6 +253,9 @@ const activeTab = ref('datasources')
 const tabs = [
   { key: 'datasources', icon: '🗄️', label: '数据源' },
   { key: 'llm', icon: '🤖', label: '大模型' },
+  { key: 'tables', icon: '📋', label: '表管理' },
+  { key: 'examples', icon: '💡', label: '示例SQL' },
+  { key: 'terminology', icon: '📖', label: '术语' },
   { key: 'system', icon: 'ℹ️', label: '系统' },
 ]
 
@@ -369,9 +450,95 @@ async function testConnection() {
   }
 }
 
+// ── Business Context ──
+const contextTables = ref<any[]>([])
+const examples = ref<any[]>([])
+const terms = ref<any[]>([])
+const showAddExample = ref(false)
+const showAddTerm = ref(false)
+const newExample = ref({ question: '', sql: '', description: '' })
+const newTerm = ref({ term: '', definition: '', description: '' })
+
+async function loadTables() {
+  try {
+    const res = await fetch('/v1/context/tables')
+    if (res.ok) contextTables.value = await res.json()
+  } catch (e) { console.error(e) }
+}
+
+async function saveTableMeta(t: any) {
+  try {
+    await fetch(`/v1/context/tables/${t.name}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ display_name: t.display_name, description: t.description, hidden: t.hidden }),
+    })
+    showToast('已保存')
+  } catch (e) { showToast('保存失败', 'error') }
+}
+
+async function loadExamples() {
+  try {
+    const res = await fetch('/v1/context/examples')
+    if (res.ok) examples.value = await res.json()
+  } catch (e) { console.error(e) }
+}
+
+async function addExample() {
+  try {
+    await fetch('/v1/context/examples', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newExample.value),
+    })
+    showAddExample.value = false
+    newExample.value = { question: '', sql: '', description: '' }
+    await loadExamples()
+    showToast('已添加')
+  } catch (e) { showToast('添加失败', 'error') }
+}
+
+async function deleteExample(id: string) {
+  try {
+    await fetch(`/v1/context/examples/${id}`, { method: 'DELETE' })
+    await loadExamples()
+  } catch (e) { console.error(e) }
+}
+
+async function loadTerms() {
+  try {
+    const res = await fetch('/v1/context/terminology')
+    if (res.ok) terms.value = await res.json()
+  } catch (e) { console.error(e) }
+}
+
+async function addTerm() {
+  try {
+    await fetch('/v1/context/terminology', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newTerm.value),
+    })
+    showAddTerm.value = false
+    newTerm.value = { term: '', definition: '', description: '' }
+    await loadTerms()
+    showToast('已添加')
+  } catch (e) { showToast('添加失败', 'error') }
+}
+
+async function deleteTerm(id: string) {
+  try {
+    await fetch(`/v1/context/terminology/${id}`, { method: 'DELETE' })
+    await loadTerms()
+  } catch (e) { console.error(e) }
+}
+
 onMounted(() => {
   loadSources()
   loadLLMConfig()
+  loadTables()
+  loadExamples()
+  loadTerms()
 })
 </script>
 
@@ -679,4 +846,120 @@ onMounted(() => {
   font-size: 14px;
 }
 .info-label { color: var(--text-muted); }
+
+/* Business Context */
+.tab-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+.table-list { display: flex; flex-direction: column; gap: 6px; }
+.table-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.table-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  font-size: 13px;
+}
+.table-row-main .table-name {
+  padding: 0;
+  cursor: default;
+  font-weight: 600;
+  font-size: 13px;
+  display: inline;
+}
+.table-display {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.table-row-edit {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.inline-input {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 13px;
+  width: 140px;
+  background: var(--bg-primary);
+}
+.inline-input.wide { flex: 1; min-width: 200px; }
+.inline-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.add-form {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.add-form input, .add-form textarea {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--bg-primary);
+}
+.example-list, .term-list { display: flex; flex-direction: column; gap: 8px; }
+.example-item, .term-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  position: relative;
+}
+.example-q { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.example-sql {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: monospace;
+  overflow-x: auto;
+  margin: 0;
+}
+.term-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.term-name {
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 80px;
+}
+.term-def {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: none;
+  border: none;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.5;
+}
+.delete-btn:hover { opacity: 1; }
 </style>
