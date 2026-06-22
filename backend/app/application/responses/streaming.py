@@ -127,6 +127,14 @@ async def stream_response(
                     "call_id": chunk["call_id"],
                     "arguments": chunk["arguments"],
                 }
+            elif chunk["type"] == "tool_result":
+                # SQL execution result — forward to frontend
+                yield {
+                    "type": "tool_result",
+                    "call_id": chunk["call_id"],
+                    "name": chunk["name"],
+                    "result": chunk["result"],
+                }
 
         # 4. Completed
         yield {

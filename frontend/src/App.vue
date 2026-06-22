@@ -122,6 +122,44 @@
                     </div>
                   </div>
 
+                  <!-- Execute SQL -->
+                  <div v-else-if="item.name === 'execute_sql'" class="tool-card sql-card">
+                    <div class="tool-header" @click="item._open = !item._open">
+                      <span class="tool-icon">🗃️</span>
+                      <span class="tool-name">SQL 查询</span>
+                      <span class="tool-toggle">{{ item._open ? '▼' : '▶' }}</span>
+                    </div>
+                    <div class="tool-body" v-if="item._open !== false">
+                      <pre class="sql-code">{{ parseArgs(item.arguments).sql }}</pre>
+                      <div v-if="item._result" class="sql-result">
+                        <div class="result-meta">
+                          <span>✅ {{ item._result.row_count ?? item._result.rows?.length ?? 0 }} 条结果</span>
+                        </div>
+                        <div class="result-table-wrap" v-if="item._result.columns?.length">
+                          <table class="result-table">
+                            <thead>
+                              <tr>
+                                <th v-for="col in item._result.columns" :key="col.name">{{ col.name }}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr v-for="(row, ri) in (item._result.rows || []).slice(0, 100)" :key="ri">
+                                <td v-for="col in item._result.columns" :key="col.name">{{ row[col.name] ?? '' }}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div v-if="(item._result.rows?.length || 0) > 100" class="result-more">
+                            显示前 100 条，共 {{ item._result.rows.length }} 条
+                          </div>
+                        </div>
+                        <div v-if="item._result.error" class="result-error">
+                          ❌ {{ item._result.error }}
+                        </div>
+                      </div>
+                      <div v-else class="sql-loading">执行中...</div>
+                    </div>
+                  </div>
+
                   <!-- Generic tool call -->
                   <div v-else class="tool-card generic-card">
                     <div class="tool-header" @click="item._open = !item._open">
@@ -393,6 +431,13 @@ async function sendMessage(text?: string) {
           } else if (event.type === 'response.output_item.added') {
             if (event.item.type === 'function_call') {
               outputItems.push(event.item)
+              tempTurn.output = [...outputItems]
+            }
+          } else if (event.type === 'tool_result') {
+            // SQL execution result — attach to the matching function_call item
+            let fcItem = outputItems.find(o => o.type === 'function_call' && o.call_id === event.call_id)
+            if (fcItem) {
+              fcItem._result = event.result
               tempTurn.output = [...outputItems]
             }
           } else if (event.type === 'response.completed') {
@@ -689,6 +734,80 @@ async function scrollToBottom() {
 
 /* Generic tool card */
 .generic-card .tool-header { background: var(--bg-tertiary); }
+
+/* SQL card */
+.sql-card .tool-header { background: rgba(139, 92, 246, 0.08); }
+.sql-card .tool-name { color: #8b5cf6; }
+.sql-code {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow-x: auto;
+  color: var(--text-primary);
+  margin: 0 0 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.sql-result { margin-top: 8px; }
+.result-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.result-table-wrap {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.result-table th {
+  background: var(--bg-tertiary);
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  white-space: nowrap;
+}
+.result-table td {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.result-table tr:hover td {
+  background: var(--bg-secondary);
+}
+.result-more {
+  text-align: center;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.result-error {
+  color: #ef4444;
+  font-size: 13px;
+  padding: 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 6px;
+}
+.sql-loading {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 8px;
+  animation: pulse 1.5s infinite;
+}
 
 /* Streaming dots */
 .streaming-dots { display: flex; gap: 4px; padding: 4px 0; }

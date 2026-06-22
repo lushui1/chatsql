@@ -224,6 +224,14 @@ class DataSourceManager:
         # 3. Load from env (overrides file)
         self.load_from_env()
 
+    async def execute(self, source_name: str, sql: str) -> dict[str, Any]:
+        """Execute SQL on a data source and return results.
+
+        Returns: {columns: [{name, type}], rows: [dict], row_count: int}
+        """
+        ds = self.get_source(source_name)
+        return await ds.execute(sql)
+
 
 # ── Singleton ──
 
