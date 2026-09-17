@@ -18,7 +18,7 @@ Content-Type: application/json
 | Header | 说明 | 示例 |
 |--------|------|------|
 | X-Session-Id | 会话 ID（可选，不传则自动创建） | `sess_abc123` |
-| X-SmartBot-Mode | 模式 | `fast` 或 `think` |
+| X-ChatSQL-Mode | 模式 | `fast` 或 `think` |
 | Accept | 响应格式 | `text/event-stream`（流式）或 `application/json` |
 
 **请求体**：
@@ -31,7 +31,7 @@ Content-Type: application/json
   "stream": true,
   "tools": [
     {"type": "function", "name": "planning"},
-    {"type": "function", "name": "smartbot_chart"},
+    {"type": "function", "name": "chatsql_chart"},
     {"type": "function", "name": "ask_clarification"},
     {"type": "function", "name": "propose_subscription"}
   ]

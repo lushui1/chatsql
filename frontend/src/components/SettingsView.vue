@@ -60,7 +60,7 @@
                 </select>
               </label>
               <label>主机<input v-model="newSource.host" placeholder="localhost" /></label>
-              <label>端口<input v-model.number="newSource.port" :placeholder="defaultPort" type="number" /></label>
+              <label>端口<input v-model.number="newSource.port" :placeholder="String(defaultPort)" type="number" /></label>
               <label>数据库<input v-model="newSource.database" placeholder="analytics" /></label>
               <label>用户名<input v-model="newSource.username" placeholder="root" /></label>
               <label>密码<input v-model="newSource.password" type="password" placeholder="••••" /></label>

@@ -12,7 +12,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
         "name": "execute_sql",
         "description": (
             "执行 SQL 查询并返回结果数据。这是获取真实数据的唯一方式。\n"
-            "必须先用本工具查询数据，再用 smartbot_chart 展示图表。\n"
+            "必须先用本工具查询数据，再用 chatsql_chart 展示图表。\n"
             "返回格式: {columns: [{name, type}], rows: [dict], row_count: int}"
         ),
         "parameters": {
@@ -81,7 +81,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
-        "name": "smartbot_chart",
+        "name": "chatsql_chart",
         "description": "生成图表数据（柱状图、条形图、折线图、饼图、表格）。必须先用 execute_sql 获取真实数据，再调用本工具展示。",
         "parameters": {
             "type": "object",
@@ -147,7 +147,7 @@ DEFAULT_TOOLS: list[dict[str, Any]] = [
 ]
 
 # Tool names that are "result-type" (rendered as cards in result area)
-RESULT_TOOLS = {"smartbot_chart", "ask_clarification", "propose_subscription", "execute_sql"}
+RESULT_TOOLS = {"chatsql_chart", "ask_clarification", "propose_subscription", "execute_sql"}
 
 # Tool names that are "planning-type" (rendered in planning area)
 PLANNING_TOOLS = {"planning"}

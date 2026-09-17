@@ -24,17 +24,19 @@
 </template>
 
 <script setup lang="ts">
+type ViewId = 'chat' | 'dashboard' | 'settings'
+
 defineProps<{
-  currentView: string
+  currentView: ViewId
   isDark: boolean
 }>()
 
 defineEmits<{
-  navigate: [view: string]
+  navigate: [view: ViewId]
   'toggle-theme': []
 }>()
 
-const navItems = [
+const navItems: { id: ViewId; icon: string; label: string }[] = [
   { id: 'chat', icon: '💬', label: '对话' },
   { id: 'dashboard', icon: '📊', label: '仪表盘' },
   { id: 'settings', icon: '⚙️', label: '设置' },

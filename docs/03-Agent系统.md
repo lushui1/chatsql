@@ -85,7 +85,7 @@ ChatSQL 内置 4 个工具，Agent 通过 function_call 按需调用：
 - 向用户展示分析思路，增加透明度
 - 帮助 Agent 自己理清查询逻辑
 
-### 2. smartbot_chart（图表生成）
+### 2. chatsql_chart（图表生成）
 
 **触发条件**：需要可视化展示的查询结果
 
@@ -152,7 +152,8 @@ ChatSQL 内置 4 个工具，Agent 通过 function_call 按需调用：
 | 适用 | 简单查询、单表、明确问题 | 复杂分析、多表关联、模糊问题 |
 | Token 消耗 | 低 | 高 |
 
-**切换方式**：前端侧边栏顶部 fast/think 按钮，或请求 Header `X-SmartBot-Mode`
+**切换方式**：前端侧边栏顶部 fast/think 按钮，或请求 Header `X-ChatSQL-Mode`
+（旧名 `X-SmartBot-Mode` 仍兼容）
 
 ## System Prompt 动态注入
 

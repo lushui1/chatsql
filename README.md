@@ -41,6 +41,32 @@ open http://localhost:8080
 | 前端 | Vue 3 + Vite + ECharts |
 | 部署 | Docker Compose |
 
+## SQL 安全
+
+所有进入执行链路的 SQL 都必须通过 `SQLValidator`（`backend/app/application/sql_validator.py`）：
+
+1. **语句白名单** — 只允许 `SELECT` / `WITH` 开头；元数据接口可开 `DESCRIBE` / `SHOW` / `EXPLAIN`
+2. **禁止堆叠** — 多语句一律拒绝
+3. **禁止写操作** — DDL / DML / 权限语句 / 存储过程调用
+4. **禁止越权读文件** — `read_csv` / `glob` / `LOAD_FILE` / `INTO OUTFILE` 等
+5. **标识符校验** — 表名拼进 SQL 前必须 `sanitize_identifier`，杜绝注入
+6. **自动 LIMIT** — 顶层无 `LIMIT` 时自动追加，避免全表拉取
+
+关键实现：**所有检查都在词法掩码后的文本上做**——字符串字面量、引号标识符、
+注释会先被替换成空格。否则 `WHERE status = '已签收;'` 会被误判成两条语句。
+
+回归测试：
+
+```bash
+cd backend && python test_sql_validator.py
+```
+
+覆盖 16 条正常查询（必须放行）+ 25 条危险语句（必须拦截）+ LIMIT 追加 + 标识符注入。
+
 ## License
 
-MIT
+MIT — 见 [LICENSE](./LICENSE)
+
+第三方来源与独立性声明见 [ATTRIBUTION.md](./ATTRIBUTION.md)。
+本项目在产品设计上参考了 [SQLBot](https://github.com/dataease/SQLBot) 的功能划分思路，
+但**未复制任何源码**，实现路径完全独立（详见 ATTRIBUTION.md）。

@@ -14,6 +14,12 @@ from app.application.datasources import (
     TableInfo,
     create_datasource,
 )
+from app.application.sql_validator import SQLValidator
+
+# 统一出口的最后一道防线。这里服务的是 LLM 工具链路，只可能产出 SELECT/WITH，
+# 因此不开 allow_readonly_admin —— DESCRIBE/SHOW 由 datasource_routes 自己的
+# validator 单独放行，不经过本出口。
+_EXECUTE_VALIDATOR = SQLValidator(allow_readonly_admin=False)
 
 
 class DataSourceManager:
@@ -70,6 +76,9 @@ class DataSourceManager:
                 ],
             }
         else:
+            # 表名会被各数据源实现拼进 DESCRIBE / SHOW COLUMNS 语句，
+            # 必须先校验，否则 table_name 就是 SQL 注入点。
+            table_name = SQLValidator.sanitize_identifier(table_name)
             columns = await ds.describe_table(table_name)
             stats = await ds.get_table_stats(table_name)
             return {
@@ -227,8 +236,19 @@ class DataSourceManager:
     async def execute(self, source_name: str, sql: str) -> dict[str, Any]:
         """Execute SQL on a data source and return results.
 
+        这是所有查询的**唯一出口**，因此在此做最后一道安全校验：
+        即使上游（LLM 工具链路 / HTTP 端点 / 内部调用）漏检或将来新增
+        调用方没校验，危险语句也无法到达数据库。
+
         Returns: {columns: [{name, type}], rows: [dict], row_count: int}
+
+        Raises:
+            ValueError: SQL 安全校验不通过
         """
+        is_safe, reason = _EXECUTE_VALIDATOR.validate(sql)
+        if not is_safe:
+            raise ValueError(f"SQL 安全校验不通过: {reason}")
+
         ds = self.get_source(source_name)
         return await ds.execute(sql)
 

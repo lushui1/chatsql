@@ -39,11 +39,19 @@ async def verify_admin_key(
     return token
 
 
-def get_session_mode(x_smartbot_mode: str | None = Header(None)) -> str | None:
-    """Extract session mode from X-SmartBot-Mode header."""
-    if x_smartbot_mode is None:
+def get_session_mode(
+    x_chatsql_mode: str | None = Header(None, alias="X-ChatSQL-Mode"),
+    # 兼容旧客户端 / 未重新构建的前端产物（原名 SmartBot）
+    x_smartbot_mode: str | None = Header(None, alias="X-SmartBot-Mode"),
+) -> str | None:
+    """Extract session mode from X-ChatSQL-Mode header.
+
+    X-SmartBot-Mode 为历史遗留别名，待前端全量更新后可移除。
+    """
+    raw = x_chatsql_mode if x_chatsql_mode is not None else x_smartbot_mode
+    if raw is None:
         return None
-    mode = x_smartbot_mode.lower().strip()
+    mode = raw.lower().strip()
     if mode not in ("fast", "think"):
         raise HTTPException(status_code=400, detail="mode must be fast or think")
     return mode

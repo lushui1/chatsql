@@ -91,7 +91,8 @@
                     </div>
 
                     <!-- Chart -->
-                    <div v-else-if="item.name === 'smartbot_chart'" class="tool-card chart-card">
+                    <!-- 兼容历史会话里存的旧工具名 smartbot_chart -->
+                    <div v-else-if="item.name === 'chatsql_chart' || item.name === 'smartbot_chart'" class="tool-card chart-card">
                       <div class="tool-header">
                         <span class="tool-icon">📊</span>
                         <span class="tool-name">数据图表</span>
@@ -352,7 +353,7 @@ async function sendMessage(text?: string) {
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-SmartBot-Mode': mode.value,
+      'X-ChatSQL-Mode': mode.value,
     }
     if (currentSessionId.value) {
       headers['X-Session-Id'] = currentSessionId.value

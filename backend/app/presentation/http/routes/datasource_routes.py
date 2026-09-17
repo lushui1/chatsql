@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from app.application.datasources import DataSourceConfig
 from app.application.datasources.manager import get_manager
+from app.application.sql_validator import SQLValidator
 
 router = APIRouter()
 
@@ -106,13 +107,36 @@ async def get_full_metadata(name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# 允许 DESCRIBE / SHOW / EXPLAIN 等只读管理语句（前端"查看表结构"会用到），
+# 但 DDL / DML 依然被 FORBIDDEN_KEYWORDS 拦住。
+_EXEC_VALIDATOR = SQLValidator(allow_readonly_admin=True)
+_EXEC_ROW_LIMIT = 1000
+
+
 @router.post("/v1/datasources/execute")
 async def execute_sql(req: ExecuteRequest):
-    """Execute SQL against a named data source."""
+    """Execute SQL against a named data source.
+
+    安全约束（缺一不可）：
+    1. 语句必须以 SELECT / WITH / DESCRIBE / SHOW / EXPLAIN 开头
+    2. 禁止多语句堆叠
+    3. 禁止 DDL / DML / 文件读写函数
+    4. 自动追加 LIMIT，避免全表拉取打到 OOM
+    """
+    is_safe, reason = _EXEC_VALIDATOR.validate(req.sql)
+    if not is_safe:
+        raise HTTPException(status_code=400, detail=f"SQL 安全校验不通过: {reason}")
+
     mgr = get_manager()
     try:
         ds = mgr.get_source(req.source)
-        result = await ds.execute(req.sql)
+        sql = _EXEC_VALIDATOR.enforce_limit(req.sql, limit=_EXEC_ROW_LIMIT)
+        result = await ds.execute(sql)
+        # 截断：即使底层没吃 LIMIT（部分方言不支持），这里再兜一层
+        rows = result.get("rows", [])
+        if len(rows) > _EXEC_ROW_LIMIT:
+            result["rows"] = rows[:_EXEC_ROW_LIMIT]
+            result["truncated"] = True
         return JSONResponse(content=result)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Data source '{req.source}' not found")

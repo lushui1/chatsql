@@ -13,6 +13,8 @@ from typing import Any
 
 import duckdb
 
+from app.application.sql_validator import SQLValidator
+
 
 # ── Data Models ──
 
@@ -178,12 +180,15 @@ class DuckDBDataSource(DataSource):
         return [TableInfo(name=r[0]) for r in result]
 
     async def describe_table(self, table_name: str) -> list[ColumnInfo]:
-        result = self.conn.execute(f"DESCRIBE {table_name}").fetchall()
+        # 表名经校验 + 加引号后再拼，避免 SQL 注入
+        ident = SQLValidator.quote_identifier(table_name, "duckdb")
+        result = self.conn.execute(f"DESCRIBE {ident}").fetchall()
         return [ColumnInfo(name=r[0], type=r[1]) for r in result]
 
     async def get_table_stats(self, table_name: str) -> dict:
         try:
-            count_result = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+            ident = SQLValidator.quote_identifier(table_name, "duckdb")
+            count_result = self.conn.execute(f"SELECT COUNT(*) FROM {ident}").fetchone()
             row_count = count_result[0] if count_result else 0
         except Exception:
             row_count = None

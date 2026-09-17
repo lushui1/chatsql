@@ -57,7 +57,7 @@ class ResponsesService:
             "1. 理解用户意图，必要时调用 ask_clarification 澄清\n"
             "2. 简单问题可直接写 SQL 查询；复杂问题先用 planning 工具输出分析规划\n"
             "3. 用 execute_sql 工具执行 SQL 获取真实数据（不要编造数据！）\n"
-            "4. 用 smartbot_chart 工具将查询结果以图表/表格形式展示\n"
+            "4. 用 chatsql_chart 工具将查询结果以图表/表格形式展示\n"
             "5. 给出简洁的文字结论\n\n"
             "⚠️ 重要：必须通过 execute_sql 获取真实数据，绝对不要猜测或编造查询结果。\n\n"
         )
@@ -154,10 +154,12 @@ class ResponsesService:
                 return {"error": "没有配置数据源", "columns": [], "rows": [], "row_count": 0}
             datasource = sources[0]["name"]
 
-        # Add LIMIT if not present
-        sql_stripped = sql.strip().rstrip(";").upper()
-        if "LIMIT" not in sql_stripped:
-            sql = sql.strip().rstrip(";") + f" LIMIT {limit}"
+        # Add LIMIT if not present.
+        # 旧实现用 `"LIMIT" not in sql.upper()`，两个漏判：
+        #   1) 只有子查询有 LIMIT 时，外层不加 -> 可能拉回全表
+        #   2) 字符串字面量里出现 "limit" 单词 -> 误判为已有 LIMIT
+        # enforce_limit 只在括号深度 0 的位置找 LIMIT，且基于词法掩码。
+        sql = validator.enforce_limit(sql, limit=limit)
 
         try:
             result = await mgr.execute(datasource, sql)

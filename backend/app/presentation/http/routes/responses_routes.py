@@ -44,12 +44,13 @@ async def create_response(
     db: AsyncSession = Depends(get_db),
     _auth: str = Depends(verify_api_key),
     x_session_id: str | None = Header(None),
-    x_smartbot_mode: str | None = Header(None),
+    x_chatsql_mode: str | None = Header(None, alias="X-ChatSQL-Mode"),
+    x_smartbot_mode: str | None = Header(None, alias="X-SmartBot-Mode"),
 ):
     """Create a response — OpenAI Responses API compatible."""
     # Parse session headers
     session_id = get_session_id(x_session_id)
-    mode = get_session_mode(x_smartbot_mode)
+    mode = get_session_mode(x_chatsql_mode, x_smartbot_mode)
 
     service = ResponsesService(db, _settings)
 
