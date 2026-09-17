@@ -9,11 +9,88 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator
 
 from app.config import Settings
+
+logger = logging.getLogger("chatsql")
+
+# ──────────────────────────────────────────────────────────────
+# Retry policy
+#
+# 背景（实测踩坑）：批量调用时触发网关 QPM 限制，连续 429 会把整批
+# 请求打爆，而且失败样本集中出现在后半段 —— 如果不做退避，很容易
+# 得出「改了 prompt 之后反而变差」这种完全错误的结论。
+# ──────────────────────────────────────────────────────────────
+
+RETRY_MAX = 3                      # 最多额外重试 3 次
+RETRY_DELAYS = [1.5, 4, 10]        # 指数退避（秒）
+REQUEST_TIMEOUT = 120.0            # 单请求超时（秒）
+CONNECT_TIMEOUT = 10.0             # 建连超时（秒）
+
+# 可重试的状态码：限流 + 服务端错误
+_RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 522, 524}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """判断异常是否值得重试（限流 / 临时性服务端错误 / 超时）。"""
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if isinstance(status, int):
+        return status in _RETRYABLE_STATUS
+
+    name = type(exc).__name__.lower()
+    if any(k in name for k in ("ratelimit", "apitimeouterror", "timeoutexception",
+                               "connecttimeout", "readtimeout", "connectionerror",
+                               "apiconnectionerror", "internalServerError".lower())):
+        return True
+
+    text = str(exc).lower()
+    return any(k in text for k in ("rate limit", "rate_limit", "429",
+                                   "timed out", "timeout", "temporarily unavailable"))
+
+
+async def _retry_stream(factory, *, max_retries: int = RETRY_MAX,
+                        delays: list[float] | None = None):
+    """把「建立流式请求 + 迭代」整体包一层重试。
+
+    安全前提：**只有在还没向外 yield 任何 chunk 时才允许重试**。
+    一旦已经吐出内容，重试会造成前端收到重复文本，所以直接抛出。
+
+    `factory()` 必须返回一个新的 async iterable（每次调用重新发起请求）。
+    """
+    delays = delays if delays is not None else RETRY_DELAYS
+    last_exc: BaseException | None = None
+
+    for attempt in range(max_retries + 1):
+        started = False
+        try:
+            stream = await factory()
+            async for chunk in stream:
+                started = True
+                yield chunk
+            return  # 正常结束
+        except BaseException as exc:  # noqa: BLE001 — 需要感知 CancelledError
+            if isinstance(exc, (asyncio.CancelledError, GeneratorExit)):
+                raise
+            last_exc = exc
+            if started:
+                # 已经吐出内容，重试会导致重复输出 —— 不重试
+                raise
+            if attempt >= max_retries or not _is_retryable(exc):
+                raise
+            delay = delays[min(attempt, len(delays) - 1)]
+            logger.warning(
+                f"LLM 调用失败({type(exc).__name__}: {str(exc)[:120]})，"
+                f"{delay}s 后重试 ({attempt + 1}/{max_retries})"
+            )
+            await asyncio.sleep(delay)
+
+    if last_exc:
+        raise last_exc
 
 # ──────────────────────────────────────────────────────────────
 # Provider defaults: base_url + suggested models per provider
@@ -108,7 +185,19 @@ class OpenAIProvider(LLMProvider):
 
     def __init__(self, api_key: str, base_url: str):
         from openai import AsyncOpenAI
-        self._client = AsyncOpenAI(api_key=api_key or "dummy", base_url=base_url)
+        try:
+            import httpx
+            timeout = httpx.Timeout(REQUEST_TIMEOUT, connect=CONNECT_TIMEOUT)
+        except ImportError:  # pragma: no cover
+            timeout = REQUEST_TIMEOUT
+        # max_retries=0：交给下面的 _retry_stream 统一控制，
+        # 否则 SDK 内部重试与外层重试会叠加，退避时间不可控。
+        self._client = AsyncOpenAI(
+            api_key=api_key or "dummy",
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,
+        )
 
     def _convert_tools(self, tools: list[dict] | None) -> list[dict] | None:
         """Convert internal tool format to OpenAI function-calling format."""
@@ -129,60 +218,69 @@ class OpenAIProvider(LLMProvider):
     ) -> AsyncGenerator[dict[str, Any], None]:
         openai_tools = self._convert_tools(tools)
 
-        stream = await self._client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=openai_tools,
-            stream=True,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        async def _attempt() -> AsyncGenerator[dict[str, Any], None]:
+            """单次尝试：发起请求 + 迭代 + 转成统一 chunk 格式。
 
-        current_tool_call: dict | None = None
-        full_text = ""
+            每次重试都会重新调用它，内部状态（full_text / current_tool_call）
+            随之重置，避免上一次的半成品污染这一次。
+            """
+            stream = await self._client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=openai_tools,
+                stream=True,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
 
-        async for chunk in stream:
-            delta = chunk.choices[0].delta if chunk.choices else None
-            if delta is None:
-                continue
+            current_tool_call: dict | None = None
+            full_text = ""
 
-            # Text content
-            if delta.content:
-                full_text += delta.content
-                yield {"type": "text_delta", "text": delta.content}
+            async for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta is None:
+                    continue
 
-            # Tool calls
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.id:  # New tool call starts
-                        if current_tool_call:
-                            yield {
-                                "type": "function_call",
-                                "call_id": current_tool_call["call_id"],
-                                "name": current_tool_call["name"],
-                                "arguments": current_tool_call["arguments"],
+                # Text content
+                if delta.content:
+                    full_text += delta.content
+                    yield {"type": "text_delta", "text": delta.content}
+
+                # Tool calls
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        if tc.id:  # New tool call starts
+                            if current_tool_call:
+                                yield {
+                                    "type": "function_call",
+                                    "call_id": current_tool_call["call_id"],
+                                    "name": current_tool_call["name"],
+                                    "arguments": current_tool_call["arguments"],
+                                }
+                            current_tool_call = {
+                                "call_id": tc.id,
+                                "name": tc.function.name if tc.function else "",
+                                "arguments": "",
                             }
-                        current_tool_call = {
-                            "call_id": tc.id,
-                            "name": tc.function.name if tc.function else "",
-                            "arguments": "",
-                        }
-                    if tc.function and tc.function.arguments:
-                        if current_tool_call:
-                            current_tool_call["arguments"] += tc.function.arguments
+                        if tc.function and tc.function.arguments:
+                            if current_tool_call:
+                                current_tool_call["arguments"] += tc.function.arguments
 
-        # Text done
-        if full_text:
-            yield {"type": "text_done", "text": full_text}
+            # Text done
+            if full_text:
+                yield {"type": "text_done", "text": full_text}
 
-        # Finish pending tool call
-        if current_tool_call:
-            yield {
-                "type": "function_call",
-                "call_id": current_tool_call["call_id"],
-                "name": current_tool_call["name"],
-                "arguments": current_tool_call["arguments"],
-            }
+            # Finish pending tool call
+            if current_tool_call:
+                yield {
+                    "type": "function_call",
+                    "call_id": current_tool_call["call_id"],
+                    "name": current_tool_call["name"],
+                    "arguments": current_tool_call["arguments"],
+                }
+
+        async for out in _retry_stream(_attempt):
+            yield out
 
 
 # ──────────────────────────────────────────────────────────────

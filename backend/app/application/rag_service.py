@@ -70,6 +70,19 @@ def _edit_distance(s1: str, s2: str) -> int:
     return prev_row[-1]
 
 
+# 明显无意义的表名/术语名占位值
+_PLACEHOLDER_NAMES = {
+    "undefined", "null", "none", "nan", "n/a", "na", "-", "--", "test",
+    "未定义", "无", "空",
+}
+
+
+def _is_valid_name(name: str) -> bool:
+    """Reject placeholder / empty names from the business context store."""
+    n = (name or "").strip().lower()
+    return bool(n) and n not in _PLACEHOLDER_NAMES
+
+
 def _keyword_match_score(keywords: set[str], target_text: str) -> float:
     """Score how well keywords match target text. Returns 0-1."""
     if not keywords:
@@ -146,6 +159,9 @@ async def retrieve_context(
     # ── Layer 1: DataSource-level (simplified: use provided datasource or all) ──
     # In multi-source mode, score each datasource by table name overlap
     all_tables = await context_store.list_tables_meta(datasource)
+    # 过滤业务上下文库里的占位/脏记录（历史遗留的 "undefined" 之类），
+    # 否则它们会被下面的兜底逻辑当成正常表塞进 prompt
+    all_tables = [t for t in all_tables if _is_valid_name(t.get("name", ""))]
 
     # ── Layer 2: Table-level retrieval ──
     scored_tables: list[tuple[float, dict]] = []
@@ -167,15 +183,14 @@ async def retrieve_context(
             score = min(score + 0.3, 1.0)
         scored_tables.append((score, t))
 
-    # Sort by score descending, take top-K
+    # Sort by score descending, take top-K.
+    #
+    # 只保留 score > 0 的表。旧实现在"一个都没命中"时会塞 3 张 0 分表进来，
+    # 结果是每次提问都附带一批无关表名 —— 实测这类噪声会稀释有效指令，
+    # 模型反而更容易漏掉真正重要的规则。
+    # 没命中就返回空，由调用方决定要不要退化成全量表结构。
     scored_tables.sort(key=lambda x: x[0], reverse=True)
-    relevant_tables = [t for _, t in scored_tables[:top_k_tables]]
-
-    # Also include tables that score > 0 even if beyond top_k
-    # (but cap at 2x top_k to avoid bloat)
-    if not relevant_tables and scored_tables:
-        # Fallback: include top tables even with 0 score if no keyword match
-        relevant_tables = [t for _, t in scored_tables[:min(3, len(scored_tables))]]
+    relevant_tables = [t for s, t in scored_tables if s > 0][:top_k_tables]
 
     # ── Relations: get relations involving relevant tables ──
     all_relations = await context_store.list_relations(datasource)
@@ -199,7 +214,8 @@ async def retrieve_context(
         scored_examples.append((combined, ex))
 
     scored_examples.sort(key=lambda x: x[0], reverse=True)
-    relevant_examples = [e for _, e in scored_examples[:top_k_examples]]
+    # 同表检索：0 分的示例毫无参考价值，只会占 prompt 篇幅
+    relevant_examples = [e for s, e in scored_examples if s > 0][:top_k_examples]
 
     # Terminology: match by term name
     all_terms = await context_store.list_terminology()
@@ -214,11 +230,10 @@ async def retrieve_context(
         scored_terms.append((score, term))
 
     scored_terms.sort(key=lambda x: x[0], reverse=True)
-    # Only include terms with some relevance
+    # 同上：不相关就不注入。旧实现的"没命中就把全部术语塞进来"
+    # 是最典型的指令稀释来源 —— 用户问订单量，prompt 里却挂着二十条
+    # 无关术语定义。
     relevant_terms = [t for s, t in scored_terms if s > 0][:top_k_terms]
-    # If no relevant terms found, include all as fallback context
-    if not relevant_terms and all_terms:
-        relevant_terms = all_terms[:top_k_terms]
 
     return {
         "relevant_tables": relevant_tables,

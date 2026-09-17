@@ -65,6 +65,17 @@ SELECT 1 -- x
 
 掩码后第一行是 `SELECT 1  `，分号暴露 → 被多语句检查拦下。
 
+### 规则单一事实来源
+
+prompt 里告诉模型的 SQL 规则，**由校验器自己生成**（`SQLValidator.describe_rules()`），
+而不是手写在 prompt 里。
+
+原因：二者一旦不同步就会出问题。修复前 prompt 写"子查询嵌套不超过 3 层"，
+而校验器实际允许 5 层——模型按 3 层约束自己，白白损失表达能力；
+反过来若 prompt 比校验器宽松，模型会生成被拒的 SQL，用户只看到"校验不通过"。
+
+现在改 `FORBIDDEN_KEYWORDS` / `_MAX_SUBQUERY_DEPTH`，prompt 自动跟着变。
+
 ---
 
 ## 三、本次修复清单
@@ -105,9 +116,34 @@ WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d
 cd backend
 python test_sql_validator.py    # 47 项：16 放行 + 25 拦截 + LIMIT + 标识符注入
 python test_security_smoke.py   # 20 项：真实 DuckDB 上的端到端验证
+python test_llm_retry.py        # 12 项：LLM 重试 / 退避 / 不重复输出
 ```
 
 新增任何绕过手法时，先补进 `test_sql_validator.py` 的 `BLOCK_CASES`。
+
+---
+
+## 四·补、LLM 调用的重试与退避
+
+链路默认**没有**重试、退避和显式超时。批量或并发场景下一旦触发网关 QPM
+限制，连续 429 会把整批请求打爆，且失败集中在后半段——如果不处理，很容易
+得出"改了 prompt 反而变差"这种完全错误的结论（这点在 smartqa 评测中真实发生过：
+v2 组后 19 题全部因限流失败，差点误判为负面结果）。
+
+策略（`backend/app/application/llm/__init__.py`）：
+
+| 项 | 值 |
+|---|---|
+| 重试次数 | 3 次 |
+| 退避 | 1.5s / 4s / 10s |
+| 请求超时 | 120s（建连 10s） |
+| 可重试 | 408/409/425/429/5xx + 限流与超时类异常 |
+| 不重试 | 4xx 客户端错误（400/401/403…） |
+| SDK 内部重试 | 关闭（`max_retries=0`），避免退避时间不可控 |
+
+**流式安全约束**：只有**还没吐出任何内容**时才允许重试。
+一旦已经向前端 yield 过 chunk 再失败，重试会造成重复文本，此时直接抛出。
+这条由 `test_llm_retry.py` 的第 2 组用例专门守护。
 
 ---
 
@@ -120,3 +156,18 @@ python test_security_smoke.py   # 20 项：真实 DuckDB 上的端到端验证
 | SSRF | `/v1/datasources/test` 可指定任意 host/port 探测内网 | 加白名单 / 禁用内网网段 |
 | 资源限额 | 无并发查询数限制 | 加信号量 |
 | 审计日志 | 未记录谁在什么时候执行了什么 SQL | 建议加，出问题可追溯 |
+| Anthropic / Google 重试 | 本次只给 OpenAI 兼容链路加了重试 | 按同一模式补上 |
+| 评测集 | 改动 prompt / 元数据后没有量化验证手段 | 见下 |
+
+## 六、待建：问数评测集
+
+目前改动 prompt 或元数据后，**没有量化手段判断是变好还是变坏**。
+
+在 smartqa（同作者的对照实验项目）里，唯一能证明"元数据治理有效"的就是
+一套 30 题评测集（10 高频 / 10 模糊 / 10 陷阱）+ golden SQL + 归因报告。
+它的价值不在于跑分，而在于**能区分"算错"和"形状不同"**，以及**能发现
+golden 答案自身的 bug**（曾出现模型答对、标准答案错了的反例）。
+
+建议后续按同一套方法给 chatsql 建评测：
+`eval/eval_set.yaml`（问题 + golden SQL + 期望）+ `run_eval.py`
+（跑分 + 按类别统计）+ `report.py`（错题归因）。

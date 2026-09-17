@@ -22,6 +22,10 @@ import re
 # \w 在 Python3 默认含 Unicode（中文表名合法），但要排除 [.-;'" 等注入字符。
 _IDENT_SEG_RE = re.compile(r"^[^\W\d]\w*$", re.UNICODE)
 
+# 子查询嵌套上限。describe_rules() 会把它写进 prompt，
+# 保证「提示词里的数字」与「校验器实际执行的数字」永远一致。
+_MAX_SUBQUERY_DEPTH = 5
+
 # 各库的标识符引用符
 _QUOTE_BY_DIALECT = {
     "duckdb": '"', "postgresql": '"', "postgres": '"', "sqlite": '"',
@@ -122,6 +126,24 @@ class SQLValidator:
             return False, reason
 
         return True, ""
+
+    @classmethod
+    def describe_rules(cls) -> str:
+        """生成给 LLM 看的 SQL 规则文本。
+
+        单一事实来源：规则内容由校验器的实际配置推导，避免
+        "prompt 里写 3 层、校验器允许 5 层"这种不同步。
+        改校验器，prompt 自动跟着变。
+        """
+        keywords = " / ".join(cls.FORBIDDEN_KEYWORDS)
+        return (
+            "## SQL 书写规则\n"
+            f"1. 只允许 {' / '.join(cls.ALLOWED_STATEMENT_PREFIXES)} 语句，"
+            f"禁止 {keywords}\n"
+            "2. 一条 SQL 只做一件事，禁止用分号拼接多条语句\n"
+            f"3. 子查询嵌套不超过 {_MAX_SUBQUERY_DEPTH} 层\n"
+            "4. 表名、字段名只使用下面给出的表结构，不要臆造\n"
+        )
 
     @staticmethod
     def sanitize_identifier(name: str) -> str:
@@ -317,7 +339,7 @@ class SQLValidator:
 
         return True, ""
 
-    def _check_subquery_depth(self, masked: str, max_depth: int = 5) -> tuple[bool, str]:
+    def _check_subquery_depth(self, masked: str, max_depth: int = _MAX_SUBQUERY_DEPTH) -> tuple[bool, str]:
         """括号深度检查（在掩码文本上做，字符串里的括号不计数）。"""
         depth = 0
         max_found = 0

@@ -50,74 +50,167 @@ class ResponsesService:
                 result.append(item)
         return result
 
+    # 表结构注入的字符预算。超出预算说明数据源表太多，
+    # 此时宁可少给几张表，也不要把整个库塞进 prompt —— 见下面的分层说明。
+    SCHEMA_BUDGET = 4000
+
     async def _build_system_prompt(self, user_query: str = "", instructions: str | None = None, learn_context: str = "") -> str:
-        """Build system prompt with auto-fetched datasource metadata and learn context."""
-        base = (
-            "你是 ChatSQL 智能问数助手。用户会用自然语言提问，你需要：\n"
-            "1. 理解用户意图，必要时调用 ask_clarification 澄清\n"
-            "2. 简单问题可直接写 SQL 查询；复杂问题先用 planning 工具输出分析规划\n"
-            "3. 用 execute_sql 工具执行 SQL 获取真实数据（不要编造数据！）\n"
-            "4. 用 chatsql_chart 工具将查询结果以图表/表格形式展示\n"
-            "5. 给出简洁的文字结论\n\n"
-            "⚠️ 重要：必须通过 execute_sql 获取真实数据，绝对不要猜测或编造查询结果。\n\n"
+        """Build system prompt with auto-fetched datasource metadata and learn context.
+
+        分层原则（源自 smartqa 五轮 prompt 迭代的实测结论）：
+        - **必带层**：角色流程、SQL 规则。短，且不能删。
+        - **按需层**：RAG 检索出的相关表 / 术语 / 示例。命中才注入。
+        - **兜底层**：RAG 没命中时，才退化为全量表结构，且受字符预算约束。
+
+        实测证据：prompt 从 5155 字符压到 2981 字符后准确率反而从 43% 升到 53%
+        —— 指令越长，模型越容易漏掉其中某几条（指令稀释）。
+        所以这里不做"能塞多少塞多少"，而是"相关才注入"。
+        """
+        from app.application.sql_validator import SQLValidator
+
+        parts: list[str] = []
+
+        # ── 第 1 层：角色与工具流程（必带，保持精简）──
+        parts.append(
+            "你是 ChatSQL 智能问数助手。流程：\n"
+            "1. 意图不清时先用 ask_clarification 澄清，不要猜\n"
+            "2. 复杂问题先用 planning 拆解，简单问题直接写 SQL\n"
+            "3. 用 execute_sql 取真实数据 —— 绝对不要编造结果\n"
+            "4. 用 chatsql_chart 展示，并给一句结论\n"
         )
 
-        # Auto-fetch metadata from the active data source
-        try:
-            from app.application.datasources.manager import get_manager
-            import asyncio as _aio
-            mgr = get_manager()
-            sources = mgr.list_sources()
-            if sources:
-                target = sources[0]["name"]
-                loop = _aio.get_event_loop()
-                if loop.is_running():
-                    raise RuntimeError("skip")
-                metadata = loop.run_until_complete(mgr.get_full_metadata(target))
-                if metadata.get("tables"):
-                    base += "## 可用数据源表结构\n\n"
-                    for t in metadata["tables"]:
-                        cols = ", ".join(
-                            f"{c['name']}({c['type']})" if c.get("type") else c["name"]
-                            for c in t.get("columns", [])
-                        )
-                        comment = f" — {t['comment']}" if t.get("comment") else ""
-                        base += f"### {t['name']}{comment}\n字段: {cols}\n\n"
-        except Exception:
-            base += (
-                "## 可用数据源表结构\n\n"
-                "### orders — 物流订单\n"
-                "字段: order_id(订单号), status(状态), create_time(创建时间), sort_center(分拣中心), amount(金额)\n\n"
-                "### routes — 运输路线\n"
-                "字段: route(路线), capacity(容量), actual(实际), load_rate(装载率), dt(日期)\n\n"
-                "### sort_center — 分拣中心\n"
-                "字段: center_name(中心名称), volume(货量)\n\n"
-            )
+        # ── 第 2 层：SQL 规则（必带，内容由校验器生成）──
+        parts.append(SQLValidator.describe_rules())
 
-        # RAG: inject business context
+        # ── 第 3 层：RAG 按需召回的业务上下文 ──
+        rag_result: dict = {}
         if user_query:
             try:
                 from app.application.rag_service import retrieve_context, build_context_prompt
                 rag_result = await retrieve_context(user_query)
                 rag_prompt = build_context_prompt(rag_result)
                 if rag_prompt:
-                    base += f"{rag_prompt}\n"
+                    parts.append(rag_prompt)
             except Exception as e:
                 logger.warning(f"RAG context retrieval failed: {e}")
 
-        # SQL safety rules
-        base += (
-            "## SQL 安全规则\n"
-            "- 只允许 SELECT 查询，禁止 INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE\n"
-            "- 禁止执行多条 SQL 语句\n"
-            "- 子查询嵌套不超过 3 层\n\n"
-        )
+        # ── 第 4 层：表结构。RAG 命中了相关表就优先用，否则兜底全量 ──
+        schema_block = await self._build_schema_block(rag_result)
+        if schema_block:
+            parts.insert(2, schema_block)  # 表结构放在规则之后、业务上下文之前
 
+        # ── 第 5 层：学习到的经验与调用方自定义指令 ──
         if learn_context:
-            base += f"{learn_context}\n"
+            parts.append(learn_context)
         if instructions:
-            base += f"{instructions}\n"
-        return base
+            parts.append(instructions)
+
+        return "\n\n".join(p for p in parts if p)
+
+    async def _build_schema_block(self, rag_result: dict) -> str:
+        """Build the table-schema section of the prompt.
+
+        两个信息源必须合并，缺一不可：
+
+        - **数据源真实元数据**（`get_full_metadata`）：有字段名和类型，
+          写 SQL 靠它。但表多时不能全塞。
+        - **业务上下文库**（RAG 召回的 `bc_tables`）：有业务含义、分类、
+          中文名，但**通常没有字段列表**。
+
+        所以分工是：RAG 负责回答「哪些表相关」，真实元数据负责回答
+        「这些表的字段是什么」。只取 RAG 的表会导致 LLM 拿到表名却没有
+        字段，照样写不出 SQL。
+
+        注：这里曾经有个 bug —— 在 async 函数里调 `loop.run_until_complete()`
+        前判断 `loop.is_running()`，而运行中的 loop 恒为 True，于是直接
+        `raise RuntimeError("skip")` 跳到 except 分支。结果是**真实数据源的
+        表结构永远拉不到**，prompt 里恒为硬编码的 demo 三张表。
+        正确写法就是直接 await。
+        """
+        real_tables = await self._fetch_real_tables()
+
+        # RAG 召回的表名（可能带业务描述，也可能不存在于真实库中）
+        rag_tables = [t for t in (rag_result.get("relevant_tables") or [])
+                      if t.get("name")]
+        rag_names = [t["name"] for t in rag_tables]
+
+        if rag_names:
+            # 优先用真实元数据里的同名字段，RAG 只提供业务补充说明
+            chosen, missing = [], []
+            for name in rag_names:
+                if name in real_tables:
+                    t = dict(real_tables[name])
+                    rag_desc = next(
+                        (r.get("description") or r.get("display_name")
+                         for r in rag_tables if r["name"] == name),
+                        "",
+                    )
+                    if rag_desc and not t.get("comment"):
+                        t["comment"] = rag_desc
+                    chosen.append(t)
+                else:
+                    missing.append(name)
+
+            # RAG 提到但真实库没有的表：明确告知，避免模型去查不存在的表
+            note = ""
+            if missing:
+                note = f"\n\n（注意：{', '.join(missing)} 仅存在于业务上下文，当前数据源中没有该表，不要查询它。）"
+
+            if chosen:
+                return "## 相关表结构\n\n" + "\n\n".join(
+                    self._format_table(t) for t in chosen
+                ) + note
+            # RAG 全都没命中真实表 —— 退化为全量，不能让 prompt 没有字段
+            logger.warning(
+                f"RAG recalled tables {rag_names} but none exist in datasource; "
+                f"falling back to full schema"
+            )
+
+        if not real_tables:
+            return ""
+
+        lines = ["## 可用表结构"]
+        used = 0
+        omitted = 0
+        for t in real_tables.values():
+            block = self._format_table(t)
+            if used + len(block) > self.SCHEMA_BUDGET and used > 0:
+                omitted += 1
+                continue
+            lines.append(block)
+            used += len(block)
+
+        if omitted:
+            lines.append(
+                f"\n（还有 {omitted} 张表因篇幅未列出。若上面的表无法回答，"
+                f"先向用户确认要查哪张表，不要臆造字段。）"
+            )
+        return "\n\n".join(lines)
+
+    @staticmethod
+    async def _fetch_real_tables() -> dict[str, dict]:
+        """Fetch real table schema from the active data source. {name: table}"""
+        try:
+            from app.application.datasources.manager import get_manager
+            mgr = get_manager()
+            sources = mgr.list_sources()
+            if not sources:
+                return {}
+            metadata = await mgr.get_full_metadata(sources[0]["name"])
+        except Exception as e:
+            logger.warning(f"datasource metadata fetch failed: {e}")
+            return {}
+        return {t["name"]: t for t in (metadata.get("tables") or []) if t.get("name")}
+
+    @staticmethod
+    def _format_table(t: dict) -> str:
+        """Format one table's schema into prompt text."""
+        cols = ", ".join(
+            f"{c['name']}({c['type']})" if c.get("type") else c["name"]
+            for c in t.get("columns", [])
+        )
+        comment = f" — {t['comment']}" if t.get("comment") else ""
+        return f"### {t.get('name', '')}{comment}\n字段: {cols}"
 
     def _get_tools(self, request_tools: list[dict] | None) -> list[dict]:
         """Return tools to send to LLM — default tools if not specified."""
