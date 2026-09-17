@@ -156,3 +156,60 @@ class DashboardChart(Base):
 
 # Indices
 Index("ix_dashboard_charts_dashboard", DashboardChart.dashboard_id)
+
+
+# ── Skills ──
+
+
+class Skill(Base):
+    """User-defined skill — extends LLM capabilities with custom tools."""
+    __tablename__ = "skills"
+
+    id = Column(String(64), primary_key=True)  # skill_<32hex>
+    name = Column(String(128), nullable=False, unique=True)
+    version = Column(String(32), default="1.0")
+    description = Column(Text, nullable=False)
+    enabled = Column(Boolean, default=True)
+
+    # Function schema (stored as JSON)
+    function_schema = Column(Text, nullable=False)  # JSON: OpenAI tool definition
+
+    # Execution type and content
+    execution_type = Column(String(16), nullable=False)  # code | script | http
+    code = Column(Text, nullable=True)
+    script = Column(Text, nullable=True)
+    url = Column(String(512), nullable=True)
+
+    # Security policy (stored as JSON)
+    security_json = Column(Text, nullable=True)  # JSON: SkillSecurity
+
+    # Metadata
+    created_by = Column(String(64), nullable=True)
+    tags = Column(Text, nullable=True)  # JSON array
+    category = Column(String(64), default="")
+    call_count = Column(Integer, default=0)
+    last_used_at = Column(Integer, nullable=True)
+
+    created_at = Column(Integer, default=_now)
+    updated_at = Column(Integer, default=_now, onupdate=_now)
+
+
+class SkillExecutionLog(Base):
+    """Execution log for skill invocations."""
+    __tablename__ = "skill_execution_logs"
+
+    id = Column(String(64), primary_key=True)
+    skill_id = Column(String(64), nullable=False, index=True)
+    session_id = Column(String(64), nullable=False, index=True)
+    response_id = Column(String(64), nullable=True)
+    status = Column(String(16), nullable=False)  # success | failed | timeout | denied
+    input_args = Column(Text, nullable=True)     # JSON
+    output_json = Column(Text, nullable=True)    # JSON
+    error = Column(Text, nullable=True)
+    duration_ms = Column(Integer, default=0)
+    created_at = Column(Integer, default=_now)
+
+
+# Indices
+Index("ix_skills_name", Skill.name)
+Index("ix_skill_logs_skill", SkillExecutionLog.skill_id, SkillExecutionLog.created_at)

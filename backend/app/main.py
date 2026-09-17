@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.infrastructure import init_db
-from app.presentation.http.routes import responses_routes, sessions_routes, system_routes, learn_routes, datasource_routes, context_routes, dashboard_routes
+from app.presentation.http.routes import responses_routes, sessions_routes, system_routes, learn_routes, datasource_routes, context_routes, dashboard_routes, skills_routes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(datasource_routes.router, tags=["datasources"])
     app.include_router(context_routes.router, tags=["context"])
     app.include_router(dashboard_routes.router, tags=["dashboards"])
+    app.include_router(skills_routes.router, tags=["skills"])
 
 
     # Root

@@ -16,6 +16,7 @@ from app.infrastructure.repositories import conversation_store as store
 from app.application.tools.builtin_tools import get_default_tools
 from app.application.llm import LLMProvider, get_provider
 from app.application.learn.service import LearnService
+from app.application.skills.service import SkillService
 
 logger = logging.getLogger("chatsql")
 
@@ -274,6 +275,47 @@ class ResponsesService:
         except Exception as e:
             return {"error": str(e), "columns": [], "rows": [], "row_count": 0}
 
+    def _skill_names(self) -> set[str]:
+        """Get set of enabled skill names (for quick lookup)."""
+        try:
+            from app.application.skills.service import SkillService
+            skill_service = SkillService(self._db)
+            skills = asyncio.get_running_loop().run_until_complete(
+                skill_service.list_skills(enabled_only=True)
+            )
+            return {s.name for s in skills}
+        except Exception as e:
+            logger.warning(f"Failed to load skill names: {e}")
+            return set()
+
+    async def _execute_skill_tool(self, tool_call: dict, session_id: str) -> dict:
+        """Execute a user-defined skill tool call."""
+        try:
+            args = json.loads(tool_call["arguments"]) if tool_call.get("arguments") else {}
+        except json.JSONDecodeError:
+            args = {}
+
+        from app.infrastructure.repositories import skill_store as store
+        from app.domain.skill_domain import SkillExecutionContext
+        from app.application.skills.service import SkillService
+
+        skill = await store.get_skill_by_name(self._db, tool_call["name"])
+        if not skill:
+            return {"error": f"Skill '{tool_call['name']}' not found"}
+        if not skill.enabled:
+            return {"error": f"Skill '{tool_call['name']}' is disabled"}
+
+        # Execute skill
+        context = SkillExecutionContext(
+            skill=skill,
+            arguments=args,
+            session_id=session_id,
+        )
+        skill_service = SkillService(self._db)
+        result = await skill_service.execute_skill(context)
+
+        return result
+
     async def call_llm_stream(
         self,
         input_items: list[dict],
@@ -403,8 +445,27 @@ class ResponsesService:
                         "name": "execute_sql",
                         "result": result,
                     }
+                elif tc["name"] in self._skill_names():
+                    # Execute user-defined skill
+                    result = await self._execute_skill_tool(tc, session_id)
+                    result_str = json.dumps(result, ensure_ascii=False, default=str)
+                    if len(result_str) > 50000:
+                        result_str = result_str[:50000] + "\n... (结果过大已截断)"
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result_str,
+                    })
+
+                    yield {
+                        "type": "tool_result",
+                        "call_id": tc["id"],
+                        "name": tc["name"],
+                        "result": result,
+                    }
                 else:
-                    # Non-SQL tool calls — pass through as-is
+                    # Non-SQL, non-skill tool calls — pass through as-is
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
