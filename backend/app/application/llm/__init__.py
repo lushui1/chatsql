@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -68,7 +69,12 @@ async def _retry_stream(factory, *, max_retries: int = RETRY_MAX,
     for attempt in range(max_retries + 1):
         started = False
         try:
-            stream = await factory()
+            # factory 可能返回 coroutine（先建连再拿流），也可能直接返回
+            # async generator。两种都要支持：直接 await 一个 async generator
+            # 会抛 "object async_generator can't be used in 'await' expression"。
+            stream = factory()
+            if inspect.isawaitable(stream):
+                stream = await stream
             async for chunk in stream:
                 started = True
                 yield chunk

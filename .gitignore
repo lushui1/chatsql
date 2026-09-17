@@ -41,6 +41,8 @@ env/
 
 # Data
 data/
+# 运行时配置（含 LLM api_key，由设置页写入，绝不入库）
+backend/app/data/config.json
 *.db
 *.sqlite
 *.duckdb
