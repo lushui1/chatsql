@@ -31,6 +31,46 @@ docker compose up -d
 open http://localhost:8080
 ```
 
+## 本地开发启动
+
+> `.env` 放**仓库根目录**，不是 `backend/`。
+> 设置页写入的 `backend/app/data/config.json` 优先级最高，会覆盖 `.env`。
+
+```bash
+# 1. 配置（根目录）
+cp .env.example .env    # 没有 .env.example 时按下面字段新建
+```
+
+```ini
+CHATSQL_LLM_PROVIDER=custom
+CHATSQL_LLM_API_KEY=sk-xxx
+CHATSQL_LLM_BASE_URL=https://your-gateway/v1
+CHATSQL_LLM_MODEL=your-model
+CHATSQL_LLM_THINK_MODEL=your-model
+```
+
+```bash
+# 2. 后端（必须在 backend/ 下启动，uvicorn 需要能 import app）
+cd backend
+.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level info
+# Windows 之外把 .venv/Scripts/ 换成 .venv/bin/
+
+# 3. 前端（已配置 /v1 → 8000 代理）
+cd frontend && npm run dev      # http://127.0.0.1:5180
+
+# 4. 冒烟
+curl -X POST http://127.0.0.1:8000/v1/responses \
+  -H 'Content-Type: application/json' -d '{"input":"各分拣中心的货量是多少？","stream":true}'
+```
+
+启动日志会打印 LLM 配置摘要（key 脱敏）：
+
+```
+INFO chatsql | LLM config: provider=custom base_url=https://... model=... key=sk-ILf...TwPr (len=51)
+```
+
+看到 `base_url=(default)` 或 `key=** 未配置 **` 说明 `.env` 没读到 —— 检查文件是否在仓库根。
+
 ## 技术栈
 
 | 层 | 技术 |
