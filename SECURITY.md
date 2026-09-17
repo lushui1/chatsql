@@ -91,6 +91,7 @@ prompt 里告诉模型的 SQL 规则，**由校验器自己生成**（`SQLValida
 | 7 | `"LIMIT" not in sql.upper()` 判断是否需要加 LIMIT：子查询有 LIMIT 时不加（可能拉全表）；字符串含 "limit" 时不加 | P1 | `enforce_limit()` 只在括号深度 0 处找 LIMIT |
 | 8 | `DataSourceManager.execute` 无任何校验，新增调用方容易漏 | P1 | 在唯一出口加兜底校验 |
 | 9 | 前端 `vue-tsc` 类型错误导致构建失败（既有） | P2 | 修 `Sidebar.vue` / `SettingsView.vue` 类型收窄 |
+| 10 | `/v1/datasources/execute` 绕过 `manager.execute` 直连 `ds.execute()`，并发限流形同虚设 | P1 | 改走统一 limiter + `run_async` |
 
 ### 顺带发现的认知点
 
@@ -117,6 +118,7 @@ cd backend
 python test_sql_validator.py    # 47 项：16 放行 + 25 拦截 + LIMIT + 标识符注入
 python test_security_smoke.py   # 20 项：真实 DuckDB 上的端到端验证
 python test_llm_retry.py        # 12 项：LLM 重试 / 退避 / 不重复输出
+python test_query_timeout.py    # 19 项：超时 / 取消 / 并发 / 行数截断
 ```
 
 新增任何绕过手法时，先补进 `test_sql_validator.py` 的 `BLOCK_CASES`。
@@ -147,11 +149,41 @@ v2 组后 19 题全部因限流失败，差点误判为负面结果）。
 
 ---
 
+## 四·补、执行层资源闸门（query_guard）
+
+校验器只管「非法」，管不了「合法但昂贵」。一条笛卡尔积、一次无 LIMIT 的
+全表聚合，语法正确、权限也合法，但能打满 CPU 或撑爆内存。
+
+`backend/app/application/datasources/query_guard.py` 提供四道闸：
+
+| 闸门 | 默认值 | 配置键 |
+|---|---|---|
+| 单查询超时 | 30s | `CHATSQL_QUERY_TIMEOUT_SECONDS` |
+| 结果集行数 | 10,000（超出截断并标注） | `CHATSQL_QUERY_MAX_ROWS` |
+| 全局并发查询 | 8 | `CHATSQL_QUERY_MAX_CONCURRENCY` |
+| 超时后取消 | — | 各驱动的中断接口 |
+
+**最关键的是"取消"必须真的取消。** `asyncio.wait_for` 取消的只是 Future，
+线程里阻塞执行的驱动调用根本不会被打断——查询仍在数据库里跑，只是调用方
+不等了。所以超时后必须调驱动自己的中断接口：
+
+| 数据源 | 中断手段 |
+|---|---|
+| DuckDB | `cursor.interrupt()`（每个查询独立 cursor，中断后不影响后续查询） |
+| PostgreSQL | `conn.fetch(sql, timeout=t)` 发 CancelRequest + `conn.terminate()` 兜底 |
+| MySQL / Doris | 物理 `conn.close()`，且不归还连接池（脏连接不能复用） |
+| ClickHouse | 服务端 `max_execution_time` + 客户端丢弃连接 |
+| Hive / Presto / Spark | 没有中断接口，只能断开连接并丢弃（下次重建） |
+
+`manager.execute` 是唯一出口，在此统一施加；各数据源实现自己也有一层，
+双保险防止将来实现漏加。
+
+---
+
 ## 五、已知未覆盖项
 
 | 项 | 说明 | 建议 |
 |---|---|---|
-| 查询超时 | DuckDB/MySQL 等实现均无 timeout，复杂查询可打满 CPU | 各数据源 `execute()` 加超时与取消 |
 | 只读连接 | 未强制使用只读账号 | 数据源配置增加 `read_only` 选项，连接时设置 |
 | SSRF | `/v1/datasources/test` 可指定任意 host/port 探测内网 | 加白名单 / 禁用内网网段 |
 | 资源限额 | 无并发查询数限制 | 加信号量 |

@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     api_key: str = ""  # empty = no auth (dev mode)
     admin_key: str = ""  # empty = no admin auth
 
+    # ── Query execution guard ──
+    # 校验器拦得住非法 SQL，拦不住「合法但昂贵」的查询（笛卡尔积、
+    # 无 LIMIT 的全表扫描）。这三项是执行层的资源闸门。
+    query_timeout_seconds: float = 30.0   # 单查询超时
+    query_max_rows: int = 10_000          # 结果集最大行数（超出截断）
+    query_max_concurrency: int = 8        # 全局并发查询数
+
     # ── Streaming ──
     stream_buffer_size: int = 200  # max SSE events buffered per active stream
 

@@ -40,9 +40,27 @@ class SparkDataSource(DataSource):
             )
         return self._conn
 
+    def _discard_conn(self) -> None:
+        """超时后断开连接。
+
+        pyhive 这类 DBAPI 驱动没有中断接口，已提交的查询无法撤回，
+        只能断开连接让服务端回收。置 None 是为了下次查询重建连接，
+        避免复用一个状态不明的连接。
+        """
+        conn = self._conn
+        self._conn = None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def execute(self, sql: str) -> dict[str, Any]:
-        import asyncio
+        from app.application.datasources.query_guard import run_blocking
+
         conn = self._get_conn()
+
         def _run():
             cur = conn.cursor()
             cur.execute(sql)
@@ -51,7 +69,8 @@ class SparkDataSource(DataSource):
                 rows = [dict(zip(columns, row)) for row in cur.fetchall()]
                 return {"columns": [{"name": c} for c in columns], "rows": rows}
             return {"columns": [], "rows": []}
-        return await asyncio.get_event_loop().run_in_executor(None, _run)
+
+        return await run_blocking(_run, sql=sql, on_cancel=self._discard_conn)
 
     async def list_tables(self) -> list[TableInfo]:
         import asyncio

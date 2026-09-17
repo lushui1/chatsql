@@ -8,6 +8,12 @@ from pydantic import BaseModel
 
 from app.application.datasources import DataSourceConfig
 from app.application.datasources.manager import get_manager
+from app.application.datasources.query_guard import (
+    QueryTimeoutError,
+    cap_rows,
+    get_limiter,
+    run_async,
+)
 from app.application.sql_validator import SQLValidator
 
 router = APIRouter()
@@ -131,15 +137,17 @@ async def execute_sql(req: ExecuteRequest):
     try:
         ds = mgr.get_source(req.source)
         sql = _EXEC_VALIDATOR.enforce_limit(req.sql, limit=_EXEC_ROW_LIMIT)
-        result = await ds.execute(sql)
-        # 截断：即使底层没吃 LIMIT（部分方言不支持），这里再兜一层
-        rows = result.get("rows", [])
-        if len(rows) > _EXEC_ROW_LIMIT:
-            result["rows"] = rows[:_EXEC_ROW_LIMIT]
-            result["truncated"] = True
+        # 走统一的资源闸门（并发上限 + 超时 + 行数截断）。
+        # 这里不能绕过 manager 直接 ds.execute，否则并发限流形同虚设。
+        async with get_limiter():
+            result = await run_async(lambda: ds.execute(sql), sql=sql)
+        result = cap_rows(result, _EXEC_ROW_LIMIT)
         return JSONResponse(content=result)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Data source '{req.source}' not found")
+    except QueryTimeoutError as e:
+        # 408 而不是 500：这是客户端 SQL 太慢，不是服务故障
+        raise HTTPException(status_code=408, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

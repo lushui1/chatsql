@@ -47,18 +47,44 @@ class MySQLDataSource(DataSource):
         return self._pool
 
     async def execute(self, sql: str) -> dict[str, Any]:
+        from app.application.datasources.query_guard import run_async
+
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql)
-                if cur.description:
-                    columns = [d[0] for d in cur.description]
-                    rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
-                    return {
-                        "columns": [{"name": c} for c in columns],
-                        "rows": rows,
-                    }
-                return {"columns": [], "rows": []}
+        holder: dict[str, Any] = {}
+        released = False
+
+        async def _query():
+            nonlocal released
+            conn = await pool.acquire()
+            holder["conn"] = conn
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql)
+                    if cur.description:
+                        columns = [d[0] for d in cur.description]
+                        rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
+                        return {"columns": [{"name": c} for c in columns], "rows": rows}
+                    return {"columns": [], "rows": []}
+            finally:
+                if not released:
+                    released = True
+                    pool.release(conn)
+
+        def _cancel():
+            # 超时后必须物理关闭连接：查询可能还在 MySQL 服务端跑，
+            # 把这条连接还给连接池会让下一个使用者踩到脏状态。
+            conn = holder.get("conn")
+            if conn is None:
+                return
+            try:
+                if not released:
+                    released = True
+                    pool.release(conn)
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return await run_async(lambda: _query(), sql=sql, on_cancel=_cancel)
 
     async def list_tables(self) -> list[TableInfo]:
         pool = await self._get_pool()

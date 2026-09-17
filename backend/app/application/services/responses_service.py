@@ -254,12 +254,22 @@ class ResponsesService:
         # enforce_limit 只在括号深度 0 的位置找 LIMIT，且基于词法掩码。
         sql = validator.enforce_limit(sql, limit=limit)
 
+        from app.application.datasources.query_guard import QueryTimeoutError
+
         try:
             result = await mgr.execute(datasource, sql)
             return {
                 "columns": result.get("columns", []),
                 "rows": result.get("rows", [])[:limit],
                 "row_count": len(result.get("rows", [])),
+                "truncated": result.get("truncated", False),
+            }
+        except QueryTimeoutError as e:
+            # 超时要告诉模型怎么改，否则它会原样重试那条慢 SQL
+            return {
+                "error": f"{e}。请简化查询：加更严格的时间/维度过滤、"
+                         f"减少 JOIN、先聚合再排序，或改用抽样/近似统计。",
+                "columns": [], "rows": [], "row_count": 0,
             }
         except Exception as e:
             return {"error": str(e), "columns": [], "rows": [], "row_count": 0}

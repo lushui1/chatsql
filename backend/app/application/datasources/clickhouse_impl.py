@@ -43,12 +43,35 @@ class ClickHouseDataSource(DataSource):
             )
         return self._client
 
+    def _discard_client(self) -> None:
+        """超时后丢弃连接。
+
+        HTTP 客户端无法中断已发出的请求，只能断开连接并丢弃，
+        下次查询重建。不断开的话这条查询会一直占着服务端资源。
+        """
+        client = self._client
+        self._client = None
+        if client is None:
+            return
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     async def execute(self, sql: str) -> dict[str, Any]:
-        import asyncio
+        from app.application.datasources.query_guard import query_timeout, run_blocking
+
         client = self._get_client()
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: client.query(sql)
-        )
+        timeout = query_timeout()
+
+        def _run():
+            # max_execution_time 让服务端自己也会在超时后中止查询，
+            # 客户端断开只是兜底。
+            return client.query(
+                sql, settings={"max_execution_time": max(1, int(timeout))}
+            )
+
+        result = await run_blocking(_run, sql=sql, on_cancel=self._discard_client)
         columns = result.column_names
         rows = [dict(zip(columns, row)) for row in result.result_rows]
         return {"columns": [{"name": c} for c in columns], "rows": rows}

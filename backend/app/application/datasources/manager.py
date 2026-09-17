@@ -14,6 +14,11 @@ from app.application.datasources import (
     TableInfo,
     create_datasource,
 )
+from app.application.datasources.query_guard import (
+    cap_rows,
+    get_limiter,
+    run_async,
+)
 from app.application.sql_validator import SQLValidator
 
 # 统一出口的最后一道防线。这里服务的是 LLM 工具链路，只可能产出 SELECT/WITH，
@@ -240,17 +245,27 @@ class DataSourceManager:
         即使上游（LLM 工具链路 / HTTP 端点 / 内部调用）漏检或将来新增
         调用方没校验，危险语句也无法到达数据库。
 
-        Returns: {columns: [{name, type}], rows: [dict], row_count: int}
+        同时在此统一施加资源闸门（各数据源实现自己也有一层，这里是兜底，
+        防止将来实现漏加）：
+        - 并发上限：同时最多 N 个查询
+        - 超时：超过 N 秒中止
+        - 行数上限：结果集截断
+
+        Returns: {columns: [{name, type}], rows: [dict], row_count: int,
+                  truncated?: bool, truncated_at?: int}
 
         Raises:
             ValueError: SQL 安全校验不通过
+            QueryTimeoutError: 查询超时
         """
         is_safe, reason = _EXECUTE_VALIDATOR.validate(sql)
         if not is_safe:
             raise ValueError(f"SQL 安全校验不通过: {reason}")
 
         ds = self.get_source(source_name)
-        return await ds.execute(sql)
+        async with get_limiter():
+            result = await run_async(lambda: ds.execute(sql), sql=sql)
+        return cap_rows(result)
 
 
 # ── Singleton ──

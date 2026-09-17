@@ -169,26 +169,56 @@ class DuckDBDataSource(DataSource):
             ) AS t(center_name, volume)
         """)
 
+    def _run_guarded(self, fn, sql: str = ""):
+        """在线程池执行阻塞查询 + 超时中断。
+
+        DuckDB 的 execute 是同步 C 调用，`asyncio.wait_for` 取消不了它 ——
+        超时后必须显式 `cursor.interrupt()`，否则这条查询会继续占着 CPU。
+        每个查询用独立 cursor，中断后不影响后续查询。
+        """
+        from app.application.datasources.query_guard import run_blocking
+
+        holder: dict[str, Any] = {}
+
+        def _run():
+            cur = self.conn.cursor()
+            holder["cur"] = cur
+            return fn(cur)
+
+        def _cancel():
+            cur = holder.get("cur")
+            if cur is not None:
+                cur.interrupt()
+
+        return run_blocking(_run, sql=sql, on_cancel=_cancel)
+
     async def execute(self, sql: str) -> dict[str, Any]:
-        result = self.conn.execute(sql)
-        columns = [d[0] for d in result.description]
-        rows = [dict(zip(columns, row)) for row in result.fetchall()]
-        return {"columns": [{"name": c} for c in columns], "rows": rows}
+        def _fn(cur):
+            result = cur.execute(sql)
+            columns = [d[0] for d in result.description]
+            rows = [dict(zip(columns, row)) for row in result.fetchall()]
+            return {"columns": [{"name": c} for c in columns], "rows": rows}
+
+        return await self._run_guarded(_fn, sql)
 
     async def list_tables(self) -> list[TableInfo]:
-        result = self.conn.execute("SHOW TABLES").fetchall()
+        result = await self._run_guarded(lambda cur: cur.execute("SHOW TABLES").fetchall())
         return [TableInfo(name=r[0]) for r in result]
 
     async def describe_table(self, table_name: str) -> list[ColumnInfo]:
         # 表名经校验 + 加引号后再拼，避免 SQL 注入
         ident = SQLValidator.quote_identifier(table_name, "duckdb")
-        result = self.conn.execute(f"DESCRIBE {ident}").fetchall()
+        result = await self._run_guarded(
+            lambda cur: cur.execute(f"DESCRIBE {ident}").fetchall()
+        )
         return [ColumnInfo(name=r[0], type=r[1]) for r in result]
 
     async def get_table_stats(self, table_name: str) -> dict:
         try:
             ident = SQLValidator.quote_identifier(table_name, "duckdb")
-            count_result = self.conn.execute(f"SELECT COUNT(*) FROM {ident}").fetchone()
+            count_result = await self._run_guarded(
+                lambda cur: cur.execute(f"SELECT COUNT(*) FROM {ident}").fetchone()
+            )
             row_count = count_result[0] if count_result else 0
         except Exception:
             row_count = None

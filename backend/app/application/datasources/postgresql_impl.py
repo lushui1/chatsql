@@ -46,14 +46,34 @@ class PostgreSQLDataSource(DataSource):
         return self._pool
 
     async def execute(self, sql: str) -> dict[str, Any]:
+        from app.application.datasources.query_guard import query_timeout, run_async
+
+        timeout = query_timeout()
         pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            result = await conn.fetch(sql)
+        holder: dict[str, Any] = {}
+
+        async def _query():
+            async with pool.acquire() as conn:
+                holder["conn"] = conn
+                # asyncpg 的 timeout 会向服务端发 CancelRequest —— 这是
+                # 真正的取消，而不只是调用方不等了。
+                result = await conn.fetch(sql, timeout=timeout)
             if not result:
                 return {"columns": [], "rows": []}
             columns = list(result[0].keys())
             rows = [dict(zip(columns, row)) for row in result]
             return {"columns": [{"name": c} for c in columns], "rows": rows}
+
+        def _cancel():
+            conn = holder.get("conn")
+            if conn is None:
+                return
+            try:
+                conn.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+
+        return await run_async(lambda: _query(), sql=sql, on_cancel=_cancel)
 
     async def list_tables(self) -> list[TableInfo]:
         pool = await self._get_pool()
