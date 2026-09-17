@@ -84,7 +84,10 @@ interface DashboardChart {
 interface Dashboard {
   id: string
   name: string
-  charts: DashboardChart[]
+  description?: string
+  layout?: string
+  charts?: DashboardChart[]  // 详情接口带完整图表，列表接口只带 chart_count
+  chart_count?: number       // 列表接口返回的数字计数
   created_at: string
   updated_at: string
 }
