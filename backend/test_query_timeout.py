@@ -164,6 +164,56 @@ async def main() -> None:
     out = cap_rows(dict(small), limit=100)
     check("未超限不截断", len(out["rows"]) == 10 and "truncated" not in out)
 
+    # ── 6b. 非 JSON 原生类型必须能序列化 ──
+    section("6b. DB 类型转换（DECIMAL / 日期 / bytes）")
+    import datetime as _dt
+    import json as _json
+    from decimal import Decimal as _D
+
+    from app.application.datasources.query_guard import (
+        cap_rows as _cap,
+    )
+
+    weird = {
+        "columns": [{"name": "v"}],
+        "rows": [
+            {"v": _D("12.34")},                    # DECIMAL —— 最常见
+            {"v": _D("0.000000000000000001")},     # 极小值
+            {"v": _dt.date(2025, 6, 1)},
+            {"v": _dt.datetime(2025, 6, 1, 12, 30)},
+            {"v": _dt.timedelta(hours=3)},
+            {"v": b"binary"},
+            {"v": None},
+        ],
+    }
+    out = _cap(dict(weird), limit=100)
+    try:
+        s = _json.dumps(out, ensure_ascii=False)
+        check("含 DECIMAL 的结果可 JSON 序列化", True, f"{len(s)} 字符")
+    except TypeError as e:
+        check("含 DECIMAL 的结果可 JSON 序列化", False, str(e))
+    check("DECIMAL → float 保住数值语义", out["rows"][0]["v"] == 12.34,
+          f"实际 {out['rows'][0]['v']!r}")
+    check("日期 → ISO 字符串", out["rows"][2]["v"] == "2025-06-01")
+    check("timedelta → 秒", out["rows"][4]["v"] == 10800.0)
+    check("bytes → 文本", out["rows"][5]["v"] == "binary")
+
+    # 真实 DuckDB 上的 DECIMAL 查询（端到端，最容易炸的组合）
+    from app.application.datasources.manager import get_manager
+
+    mgr = get_manager()
+    if not mgr.has_source("demo"):
+        mgr.add_source(DataSourceConfig(name="demo", type="duckdb", url=":memory:"))
+
+    r_dec = await mgr.execute(
+        "demo", "SELECT CAST(1 AS DECIMAL(18,2)) AS amount, 'x' AS tag"
+    )
+    try:
+        _json.dumps(r_dec, ensure_ascii=False)
+        check("DuckDB DECIMAL 端到端可序列化", True, f"amount={r_dec['rows'][0]['amount']!r}")
+    except TypeError as e:
+        check("DuckDB DECIMAL 端到端可序列化", False, str(e))
+
     # ── 7. 并发上限 ──
     section("7. 并发查询限流")
     lim = get_limiter()

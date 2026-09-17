@@ -22,8 +22,11 @@ SQL 校验器只能拦「非法」语句，拦不住「合法但昂贵」的查�
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
+from decimal import Decimal
 from typing import Any, Awaitable, Callable
+from uuid import UUID
 
 logger = logging.getLogger("chatsql")
 
@@ -168,6 +171,57 @@ def get_limiter() -> ConcurrencyLimiter:
     return _limiter
 
 
+def json_safe(value: Any) -> Any:
+    """把驱动返回的 DB 类型转成 JSON 能序列化的形态。
+
+    不做这一步，任何 DECIMAL 列的查询都会在序列化时炸：
+    `Object of type Decimal is not JSON serializable`。
+    DECIMAL 在金额、比率、聚合结果里极其常见，几乎必然踩到。
+
+    同理还有 date/time（datetime 不是 JSON 原生类型）、
+    timedelta（DuckDB 的 INTERVAL）、bytes（BLOB）、UUID。
+    """
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value
+    if isinstance(value, Decimal):
+        # 优先转 float 保住数值语义（前端还要画图）；
+        # 超出 float 范围的大数退回字符串，宁可丢精度也不能丢数据。
+        try:
+            return float(value)
+        except (ValueError, OverflowError):
+            return str(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
+    if isinstance(value, datetime.timedelta):
+        return value.total_seconds()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return bytes(value).hex()
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    return str(value)
+
+
+def normalize_result(result: dict[str, Any]) -> dict[str, Any]:
+    """对结果集里的每个值做 JSON 安全化。"""
+    rows = result.get("rows")
+    if not rows:
+        return result
+    result["rows"] = [
+        {k: json_safe(v) for k, v in row.items()} if isinstance(row, dict) else json_safe(row)
+        for row in rows
+    ]
+    return result
+
+
 def cap_rows(result: dict[str, Any], limit: int | None = None) -> dict[str, Any]:
     """截断结果集，并标注被截断。
 
@@ -175,6 +229,7 @@ def cap_rows(result: dict[str, Any], limit: int | None = None) -> dict[str, Any]
     但明确标注截断行数，避免有人拿它当全量结果做决策。
     """
     limit = limit if limit is not None else max_rows()
+    normalize_result(result)
     rows = result.get("rows") or []
     if len(rows) <= limit:
         result.setdefault("row_count", len(rows))

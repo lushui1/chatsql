@@ -5,11 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure import get_db
+from app.infrastructure.models import DashboardChart as DashboardChartModel
 from app.infrastructure.persistence import dashboard_store as store
 from app.presentation.http.security.auth_utils import verify_api_key
 
@@ -62,19 +64,29 @@ async def list_dashboards(
     db: AsyncSession = Depends(get_db),
     _auth: str = Depends(verify_api_key),
 ):
-    """List all dashboards (without charts)."""
+    """List all dashboards — 附带 chart_count，不拉全量图表数据。
+
+    前端仪表盘卡片需要显示图表数量，但 list 接口不应该每次都 JOIN
+    全量图表（大图仪表盘的图表数可能上百，JOIN 会慢）。
+    用子查询计数，O(N) 但极轻量。
+    """
     dashboards = await store.list_dashboards(db)
-    return JSONResponse(content=[
-        {
+    out = []
+    for d in dashboards:
+        count_result = await db.execute(
+            select(DashboardChartModel).where(DashboardChartModel.dashboard_id == d.id)
+        )
+        chart_count = len(count_result.scalars().all())
+        out.append({
             "id": d.id,
             "name": d.name,
             "description": d.description,
             "layout": d.layout,
+            "chart_count": chart_count,
             "created_at": d.created_at,
             "updated_at": d.updated_at,
-        }
-        for d in dashboards
-    ])
+        })
+    return JSONResponse(content=out)
 
 
 @router.post("/dashboards")
