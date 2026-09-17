@@ -14,14 +14,16 @@
           @click="selectDashboard(d)"
         >
           <div class="card-preview">
-            <div v-for="c in (d.charts || []).slice(0, 3)" :key="c.id" class="mini-chart">
+            <!-- 后端返回 chart_count，前端用这个数字展示 -->
+            <div v-if="d.chart_count > 0" class="mini-chart">
               <div class="mini-chart-placeholder">📊</div>
             </div>
-            <div v-if="!d.charts?.length" class="empty-preview">暂无图表</div>
+            <div v-else class="empty-preview">暂无图表</div>
           </div>
           <div class="card-info">
             <h3>{{ d.name }}</h3>
-            <span>{{ d.charts?.length || 0 }} 个图表</span>
+            <!-- 使用后端返回的 chart_count 字段 -->
+            <span>{{ d.chart_count || 0 }} 个图表</span>
           </div>
         </div>
         <div v-if="dashboards.length === 0" class="empty-state">
